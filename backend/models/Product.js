@@ -14,7 +14,6 @@ const productSchema = new mongoose.Schema({
   modelNumber: {
     type: String,
     required: [true, 'Model number is required'],
-    unique: true,
     trim: true,
     maxlength: [100, 'Model number cannot exceed 100 characters']
   },
@@ -78,7 +77,7 @@ productSchema.index({
   'brand.name': 'text' 
 });
 
-// Unique index for model number
-productSchema.index({ modelNumber: 1 }, { unique: true });
+// Compound unique index for model number and phase combination
+productSchema.index({ modelNumber: 1, phase: 1 }, { unique: true });
 
 module.exports = mongoose.model('Product', productSchema);

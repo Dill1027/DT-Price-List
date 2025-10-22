@@ -159,17 +159,49 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// @route   GET /api/products/check-model/:modelNumber
-// @desc    Check if model number exists
+// @route   GET /api/products/check-model/:modelNumber/:phase
+// @desc    Check if model number + phase combination exists
 // @access  Private
-router.get('/check-model/:modelNumber', auth, async (req, res) => {
+router.get('/check-model/:modelNumber/:phase', auth, async (req, res) => {
   try {
-    const { modelNumber } = req.params;
-    const exists = await Product.findOne({ modelNumber: modelNumber.trim() });
+    const { modelNumber, phase } = req.params;
+    const exists = await Product.findOne({ 
+      modelNumber: modelNumber.trim(),
+      phase: phase,
+      isActive: true 
+    });
     
     res.json({
       success: true,
       exists: !!exists,
+      modelNumber: modelNumber.trim(),
+      phase: phase
+    });
+  } catch (error) {
+    console.error('Check model number + phase error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+});
+
+// @route   GET /api/products/check-model/:modelNumber
+// @desc    Check if model number exists (backwards compatibility)
+// @access  Private
+router.get('/check-model/:modelNumber', auth, async (req, res) => {
+  try {
+    const { modelNumber } = req.params;
+    const products = await Product.find({ 
+      modelNumber: modelNumber.trim(),
+      isActive: true 
+    });
+    
+    res.json({
+      success: true,
+      exists: products.length > 0,
+      count: products.length,
+      phases: products.map(p => p.phase),
       modelNumber: modelNumber.trim()
     });
   } catch (error) {
@@ -281,10 +313,10 @@ router.post('/', [
     console.error('Create product error:', error);
     
     // Handle duplicate model number error
-    if (error.code === 11000 && error.keyPattern && error.keyPattern.modelNumber) {
+    if (error.code === 11000 && error.keyPattern && (error.keyPattern.modelNumber || error.keyPattern.phase)) {
       return res.status(400).json({
         success: false,
-        message: `Product with model number "${modelNumber}" already exists`
+        message: `Product with model number "${req.body.modelNumber}" and phase "${req.body.phase}" already exists`
       });
     }
     
@@ -392,10 +424,10 @@ router.put('/:id', [
     console.error('Update product error:', error);
     
     // Handle duplicate model number error
-    if (error.code === 11000 && error.keyPattern && error.keyPattern.modelNumber) {
+    if (error.code === 11000 && error.keyPattern && (error.keyPattern.modelNumber || error.keyPattern.phase)) {
       return res.status(400).json({
         success: false,
-        message: `Product with model number "${req.body.modelNumber}" already exists`
+        message: `Product with model number "${req.body.modelNumber}" and phase "${req.body.phase}" already exists`
       });
     }
     
@@ -639,24 +671,26 @@ router.post('/bulk-upload',
             productData.price = 0;
           }
 
-          // Check if product with same model number already exists
+          // Check if product with same model number AND phase already exists
           const existingProduct = await Product.findOne({ 
             modelNumber: String(modelNumber).trim(),
+            phase: phase,
             isActive: true 
           });
 
           if (existingProduct) {
-            // If product exists, update only the price (for admin) or other allowed fields
+            // If product exists with same model number and phase, update price or other fields
             if (req.user.role === 'admin' && price && Number(price) !== existingProduct.price) {
               // Update price for existing product
               existingProduct.price = Number(price);
               existingProduct.updatedBy = req.user._id;
               await existingProduct.save();
 
-              console.log(`✅ Row ${rowNum} success: Price updated for existing product ${productData.modelNumber} from ${existingProduct.price} to ${Number(price)}`);
+              console.log(`✅ Row ${rowNum} success: Price updated for existing product ${productData.modelNumber} (${phase}) from ${existingProduct.price} to ${Number(price)}`);
               results.success.push({
                 row: rowNum,
                 modelNumber: productData.modelNumber,
+                phase: phase,
                 action: 'price_updated',
                 oldPrice: existingProduct.price,
                 newPrice: Number(price)
@@ -668,34 +702,36 @@ router.post('/bulk-upload',
               existingProduct.maxHead = Number(maxHead);
               existingProduct.maxFlow = Number(maxFlow);
               existingProduct.watt = Number(watt);
-              existingProduct.phase = phase;
               existingProduct.updatedBy = req.user._id;
               await existingProduct.save();
 
-              console.log(`✅ Row ${rowNum} success: Product details updated for existing product ${productData.modelNumber}`);
+              console.log(`✅ Row ${rowNum} success: Product details updated for existing product ${productData.modelNumber} (${phase})`);
               results.success.push({
                 row: rowNum,
                 modelNumber: productData.modelNumber,
+                phase: phase,
                 action: 'details_updated'
               });
             } else {
               // Same price, no update needed
-              console.log(`ℹ️ Row ${rowNum} skipped: Product ${productData.modelNumber} already exists with same price`);
+              console.log(`ℹ️ Row ${rowNum} skipped: Product ${productData.modelNumber} (${phase}) already exists with same price`);
               results.success.push({
                 row: rowNum,
                 modelNumber: productData.modelNumber,
+                phase: phase,
                 action: 'no_change_needed'
               });
             }
           } else {
-            // Create new product if it doesn't exist
+            // Create new product if it doesn't exist with this model number and phase combination
             const product = new Product(productData);
             await product.save();
 
-            console.log(`✅ Row ${rowNum} success: New product ${productData.modelNumber} created`);
+            console.log(`✅ Row ${rowNum} success: New product ${productData.modelNumber} (${phase}) created`);
             results.success.push({
               row: rowNum,
               modelNumber: productData.modelNumber,
+              phase: phase,
               action: 'created'
             });
           }
@@ -794,17 +830,21 @@ router.get('/download-template', auth, async (req, res) => {
       '',
       '📋 BULK UPLOAD FEATURES:',
       '',
-      '✅ NEW PRODUCTS: If a model number doesn\'t exist, a new product will be created.',
+      '✅ NEW PRODUCTS: If a model number + phase combination doesn\'t exist, a new product will be created.',
       '',
-      '✅ PRICE UPDATES: If a model number already exists but with a different price,',
+      '✅ PRICE UPDATES: If a model number + phase combination already exists but with a different price,',
       '   only the price will be updated (Admin users only).',
       '',
       '✅ DETAIL UPDATES: Project users can update product details (except price)',
       '   for existing products.',
       '',
+      '✅ PHASE VARIATIONS: Same model number can exist with different phases.',
+      '   Example: "SUB-001" can have both "1 Phase" and "3 Phase" versions.',
+      '',
       '⚠️  IMPORTANT NOTES:',
       '',
-      '• Model numbers must be unique within the system',
+      '• Model number + Phase combination must be unique within the system',
+      '• Same model number with different phases (1 Phase/3 Phase) is allowed',
       '• Phase must be exactly "1 Phase" or "3 Phase"',
       '• All numeric fields (HP, Max Head, Max Flow, Watt, Price) must be positive numbers',
       '• Category and Brand must exist in the system (use dropdowns in Products sheet)',
@@ -822,9 +862,11 @@ router.get('/download-template', auth, async (req, res) => {
       '',
       '1. Fill in the Products sheet with your data',
       '2. Use the dropdown menus for Category, Brand, and Phase',
-      '3. Save the file and upload it through the application',
-      '4. Review the upload results for any errors',
+      '3. Same model number with different phases is allowed',
+      '4. Save the file and upload it through the application',
+      '5. Review the upload results for any errors',
       '',
+      '💡 TIP: You can have the same model number for both 1 Phase and 3 Phase products.',
       '💡 TIP: Start with the sample data in the Products sheet as a reference.'
     ];
 
@@ -870,7 +912,7 @@ router.get('/download-template', auth, async (req, res) => {
     worksheet.addRow({
       category: categories.length > 0 ? categories[0].name : 'Submersible',
       brand: brands.length > 0 ? brands[0].name : 'Pentax',
-      modelNumber: 'SUB-NEW-001',
+      modelNumber: 'SUB-001',
       hp: 1,
       outlet: '1 inch',
       maxHead: 50,
@@ -881,9 +923,22 @@ router.get('/download-template', auth, async (req, res) => {
     });
 
     worksheet.addRow({
+      category: categories.length > 0 ? categories[0].name : 'Submersible',
+      brand: brands.length > 0 ? brands[0].name : 'Pentax',
+      modelNumber: 'SUB-001',
+      hp: 1,
+      outlet: '1 inch',
+      maxHead: 50,
+      maxFlow: 120,
+      watt: 1100,
+      phase: '3 Phase',
+      price: 17000
+    });
+
+    worksheet.addRow({
       category: categories.length > 1 ? categories[1].name : 'Centrifugal',
       brand: brands.length > 1 ? brands[1].name : 'Deep Tec',
-      modelNumber: 'CENT-NEW-001',
+      modelNumber: 'CENT-001',
       hp: 2,
       outlet: '2 inch',
       maxHead: 35,
