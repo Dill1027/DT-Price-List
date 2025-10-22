@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useReducer, useEffect } from 'react';
+import React, { createContext, useContext, useReducer, useEffect, useMemo, useCallback } from 'react';
+import PropTypes from 'prop-types';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 
@@ -70,16 +71,17 @@ export const AuthProvider = ({ children }) => {
     }
   }, [state.token]);
 
-  // Load user on app start
+  // Load token from localStorage on app start
   useEffect(() => {
-    if (state.token) {
-      loadUser();
+    const token = localStorage.getItem('token');
+    if (token) {
+      dispatch({ type: 'SET_TOKEN', payload: token });
     } else {
       dispatch({ type: 'SET_LOADING', payload: false });
     }
   }, []);
 
-  const loadUser = async () => {
+  const loadUser = useCallback(async () => {
     try {
       const res = await axios.get('/api/auth/me');
       dispatch({
@@ -89,9 +91,18 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       dispatch({ type: 'AUTH_ERROR' });
     }
-  };
+  }, []);
 
-  const login = async (username, password) => {
+  // Load user when token is available
+  useEffect(() => {
+    if (state.token) {
+      loadUser();
+    } else {
+      dispatch({ type: 'SET_LOADING', payload: false });
+    }
+  }, [state.token, loadUser]);
+
+  const login = useCallback(async (username, password) => {
     try {
       const res = await axios.post('/api/auth/login', {
         username,
@@ -111,9 +122,9 @@ export const AuthProvider = ({ children }) => {
       toast.error(message);
       return { success: false, message };
     }
-  };
+  }, []);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try {
       await axios.post('/api/auth/logout');
       dispatch({ type: 'LOGOUT' });
@@ -121,9 +132,9 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       dispatch({ type: 'LOGOUT' });
     }
-  };
+  }, []);
 
-  const value = {
+  const value = useMemo(() => ({
     user: state.user,
     token: state.token,
     isLoading: state.isLoading,
@@ -131,13 +142,17 @@ export const AuthProvider = ({ children }) => {
     login,
     logout,
     loadUser,
-  };
+  }), [state.user, state.token, state.isLoading, state.isAuthenticated, login, logout, loadUser]);
 
   return (
     <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
+};
+
+AuthProvider.propTypes = {
+  children: PropTypes.node.isRequired
 };
 
 export const useAuth = () => {

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import PropTypes from 'prop-types';
 import {
   Box,
   TextField,
@@ -12,18 +13,21 @@ import {
   DialogActions,
   Alert,
   InputAdornment,
+  useMediaQuery,
 } from '@mui/material';
 import { CheckCircle, Error } from '@mui/icons-material';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 
 const AddProductForm = ({ categoryId, brands, onSuccess, onCancel }) => {
+  const isMobile = useMediaQuery(theme => theme.breakpoints.down('sm'));
   const [formData, setFormData] = useState({
     modelNumber: '',
     brand: '',
     hp: '',
     outlet: '',
     maxHead: '',
+    maxFlow: '',
     watt: '',
     phase: '1 Phase',
     price: '',
@@ -52,6 +56,7 @@ const AddProductForm = ({ categoryId, brands, onSuccess, onCancel }) => {
           setModelNumberError('');
         }
       } catch (error) {
+        console.error('Model number check error:', error);
         setModelNumberStatus(null);
         setModelNumberError('');
       }
@@ -71,11 +76,9 @@ const AddProductForm = ({ categoryId, brands, onSuccess, onCancel }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Validation
-    if (!formData.modelNumber || !formData.brand || !formData.hp || 
-        !formData.outlet || !formData.maxHead || !formData.watt || 
-        !formData.phase || !formData.price) {
-      toast.error('Please fill in all required fields');
+    // Validation - only require essential fields
+    if (!formData.modelNumber || !formData.brand || !formData.phase || !formData.price) {
+      toast.error('Please fill in all required fields (Model Number, Brand, Phase, Price)');
       return;
     }
 
@@ -90,10 +93,14 @@ const AddProductForm = ({ categoryId, brands, onSuccess, onCancel }) => {
       const productData = {
         ...formData,
         category: categoryId,
-        hp: parseFloat(formData.hp),
-        maxHead: parseFloat(formData.maxHead),
-        watt: parseFloat(formData.watt),
+        // Only include numeric fields if they have values
+        hp: formData.hp ? parseFloat(formData.hp) : undefined,
+        maxHead: formData.maxHead ? parseFloat(formData.maxHead) : undefined,
+        maxFlow: formData.maxFlow ? parseFloat(formData.maxFlow) : undefined,
+        watt: formData.watt ? parseFloat(formData.watt) : undefined,
         price: parseFloat(formData.price),
+        // Keep outlet as string, can be empty
+        outlet: formData.outlet || undefined,
       };
 
       const response = await axios.post('/api/products', productData);
@@ -113,11 +120,11 @@ const AddProductForm = ({ categoryId, brands, onSuccess, onCancel }) => {
   };
 
   return (
-    <Box component="form" onSubmit={handleSubmit}>
-      <Alert severity="info" sx={{ mb: 2 }}>
+    <Box component="form" onSubmit={handleSubmit} sx={{ p: { xs: 1, sm: 0 } }}>
+      <Alert severity="info" sx={{ mb: 2, fontSize: { xs: '0.875rem', sm: '1rem' } }}>
         Model numbers must be unique. The system will automatically check for duplicates as you type.
       </Alert>
-      <Grid container spacing={2} sx={{ mt: 1 }}>
+      <Grid container spacing={{ xs: 2, sm: 2, md: 3 }} sx={{ mt: 1 }}>
         <Grid item xs={12} md={6}>
           <TextField
             fullWidth
@@ -159,46 +166,58 @@ const AddProductForm = ({ categoryId, brands, onSuccess, onCancel }) => {
         <Grid item xs={12} md={6}>
           <TextField
             fullWidth
-            label="HP"
+            label="HP (Optional)"
             type="number"
             value={formData.hp}
             onChange={(e) => handleChange('hp', e.target.value)}
-            required
             inputProps={{ min: 0, step: 0.1 }}
+            helperText="Leave empty if not applicable"
           />
         </Grid>
 
         <Grid item xs={12} md={6}>
           <TextField
             fullWidth
-            label="Outlet"
+            label="Outlet (Optional)"
             value={formData.outlet}
             onChange={(e) => handleChange('outlet', e.target.value)}
-            required
+            helperText="Leave empty if not applicable"
           />
         </Grid>
 
         <Grid item xs={12} md={6}>
           <TextField
             fullWidth
-            label="Max Head (m)"
+            label="Max Head (m) (Optional)"
             type="number"
             value={formData.maxHead}
             onChange={(e) => handleChange('maxHead', e.target.value)}
-            required
             inputProps={{ min: 0, step: 0.1 }}
+            helperText="Leave empty if not applicable"
           />
         </Grid>
 
         <Grid item xs={12} md={6}>
           <TextField
             fullWidth
-            label="Watt"
+            label="Max Flow (L/min) (Optional)"
+            type="number"
+            value={formData.maxFlow}
+            onChange={(e) => handleChange('maxFlow', e.target.value)}
+            inputProps={{ min: 0, step: 0.1 }}
+            helperText="Leave empty if not applicable"
+          />
+        </Grid>
+
+        <Grid item xs={12} md={6}>
+          <TextField
+            fullWidth
+            label="Watt (Optional)"
             type="number"
             value={formData.watt}
             onChange={(e) => handleChange('watt', e.target.value)}
-            required
             inputProps={{ min: 0 }}
+            helperText="Leave empty if not applicable"
           />
         </Grid>
 
@@ -229,14 +248,24 @@ const AddProductForm = ({ categoryId, brands, onSuccess, onCancel }) => {
         </Grid>
       </Grid>
 
-      <DialogActions sx={{ mt: 3, px: 0 }}>
-        <Button onClick={onCancel} color="inherit">
+      <DialogActions sx={{ 
+        mt: 3, 
+        px: 0,
+        flexDirection: { xs: 'column', sm: 'row' },
+        gap: { xs: 2, sm: 1 },
+        '& .MuiButton-root': {
+          width: { xs: '100%', sm: 'auto' },
+          minWidth: { sm: 100 }
+        }
+      }}>
+        <Button onClick={onCancel} color="inherit" size={isMobile ? 'large' : 'medium'}>
           Cancel
         </Button>
         <Button 
           type="submit" 
           variant="contained" 
           disabled={loading}
+          size={isMobile ? 'large' : 'medium'}
           startIcon={loading ? <CircularProgress size={20} /> : null}
         >
           {loading ? 'Adding...' : 'Add Product'}
@@ -244,6 +273,16 @@ const AddProductForm = ({ categoryId, brands, onSuccess, onCancel }) => {
       </DialogActions>
     </Box>
   );
+};
+
+AddProductForm.propTypes = {
+  categoryId: PropTypes.string.isRequired,
+  brands: PropTypes.arrayOf(PropTypes.shape({
+    _id: PropTypes.string.isRequired,
+    name: PropTypes.string.isRequired
+  })).isRequired,
+  onSuccess: PropTypes.func.isRequired,
+  onCancel: PropTypes.func.isRequired
 };
 
 export default AddProductForm;

@@ -7,11 +7,13 @@ import {
   Grid,
   CircularProgress,
   Alert,
+  useMediaQuery,
 } from '@mui/material';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 
 const EditProductForm = ({ product, brands, onSuccess, onCancel }) => {
+  const isMobile = useMediaQuery(theme => theme.breakpoints.down('sm'));
   const [formData, setFormData] = useState({
     modelNumber: '',
     brandId: '',
@@ -19,6 +21,7 @@ const EditProductForm = ({ product, brands, onSuccess, onCancel }) => {
     hp: '',
     outlet: '',
     maxHead: '',
+    maxFlow: '',
     watt: '',
     phase: '',
     price: '',
@@ -49,6 +52,7 @@ const EditProductForm = ({ product, brands, onSuccess, onCancel }) => {
         hp: product.hp || '',
         outlet: product.outlet || '',
         maxHead: product.maxHead || '',
+        maxFlow: product.maxFlow || '',
         watt: product.watt || '',
         phase: product.phase || '',
         price: product.price || '',
@@ -71,9 +75,10 @@ const EditProductForm = ({ product, brands, onSuccess, onCancel }) => {
     setError('');
 
     try {
-      // Validate required fields
-      if (!formData.modelNumber || !formData.brandId || !formData.categoryId) {
-        setError('Model Number, Brand, and Category are required');
+      // Validate required fields - only essential ones
+      if (!formData.modelNumber || !formData.brandId || !formData.categoryId || 
+          !formData.phase || !formData.price) {
+        setError('Model Number, Brand, Category, Phase, and Price are required');
         setLoading(false);
         return;
       }
@@ -83,10 +88,12 @@ const EditProductForm = ({ product, brands, onSuccess, onCancel }) => {
         modelNumber: formData.modelNumber,
         brand: formData.brandId,
         category: formData.categoryId,
-        hp: parseFloat(formData.hp) || 0,
-        outlet: formData.outlet,
-        maxHead: parseFloat(formData.maxHead) || 0,
-        watt: parseFloat(formData.watt) || 0,
+        // Only include optional fields if they have values
+        hp: formData.hp ? parseFloat(formData.hp) : undefined,
+        outlet: formData.outlet || undefined,
+        maxHead: formData.maxHead ? parseFloat(formData.maxHead) : undefined,
+        maxFlow: formData.maxFlow ? parseFloat(formData.maxFlow) : undefined,
+        watt: formData.watt ? parseFloat(formData.watt) : undefined,
         phase: formData.phase,
         price: parseFloat(formData.price) || 0,
       };
@@ -116,10 +123,10 @@ const EditProductForm = ({ product, brands, onSuccess, onCancel }) => {
   };
 
   return (
-    <Box component="form" onSubmit={handleSubmit} sx={{ mt: 2 }}>
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+    <Box component="form" onSubmit={handleSubmit} sx={{ mt: 2, p: { xs: 1, sm: 0 } }}>
+      {error && <Alert severity="error" sx={{ mb: 2, fontSize: { xs: '0.875rem', sm: '1rem' } }}>{error}</Alert>}
       
-      <Grid container spacing={2}>
+      <Grid container spacing={{ xs: 2, sm: 2, md: 3 }}>
         <Grid item xs={12} sm={6}>
           <TextField
             name="modelNumber"
@@ -175,49 +182,67 @@ const EditProductForm = ({ product, brands, onSuccess, onCancel }) => {
         <Grid item xs={12} sm={6}>
           <TextField
             name="hp"
-            label="HP"
+            label="HP (Optional)"
             type="number"
             value={formData.hp}
             onChange={handleChange}
             fullWidth
             variant="outlined"
             inputProps={{ step: "0.1" }}
+            helperText="Leave empty if not applicable"
           />
         </Grid>
         
         <Grid item xs={12} sm={6}>
           <TextField
             name="outlet"
-            label="Outlet"
+            label="Outlet (Optional)"
             value={formData.outlet}
             onChange={handleChange}
             fullWidth
             variant="outlined"
+            helperText="Leave empty if not applicable"
           />
         </Grid>
         
         <Grid item xs={12} sm={6}>
           <TextField
             name="maxHead"
-            label="Max Head"
+            label="Max Head (Optional)"
             type="number"
             value={formData.maxHead}
             onChange={handleChange}
             fullWidth
             variant="outlined"
             inputProps={{ step: "0.1" }}
+            helperText="Leave empty if not applicable"
+          />
+        </Grid>
+        
+        <Grid item xs={12} sm={6}>
+          <TextField
+            name="maxFlow"
+            label="Max Flow (L/min) (Optional)"
+            type="number"
+            value={formData.maxFlow}
+            onChange={handleChange}
+            fullWidth
+            variant="outlined"
+            inputProps={{ step: "0.1" }}
+            helperText="Leave empty if not applicable"
           />
         </Grid>
         
         <Grid item xs={12} sm={6}>
           <TextField
             name="watt"
-            label="Watt"
+            label="Watt (Optional)"
             type="number"
             value={formData.watt}
             onChange={handleChange}
             fullWidth
             variant="outlined"
+            helperText="Leave empty if not applicable"
           />
         </Grid>
         
@@ -251,11 +276,22 @@ const EditProductForm = ({ product, brands, onSuccess, onCancel }) => {
         </Grid>
       </Grid>
 
-      <Box sx={{ mt: 3, display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
+      <Box sx={{ 
+        mt: 3, 
+        display: 'flex', 
+        flexDirection: { xs: 'column', sm: 'row' },
+        gap: 2, 
+        justifyContent: 'flex-end',
+        '& .MuiButton-root': {
+          width: { xs: '100%', sm: 'auto' },
+          minWidth: { sm: 100 }
+        }
+      }}>
         <Button 
           onClick={onCancel} 
           variant="outlined"
           disabled={loading}
+          size={isMobile ? 'large' : 'medium'}
         >
           Cancel
         </Button>
@@ -263,6 +299,7 @@ const EditProductForm = ({ product, brands, onSuccess, onCancel }) => {
           type="submit" 
           variant="contained" 
           disabled={loading}
+          size={isMobile ? 'large' : 'medium'}
           startIcon={loading ? <CircularProgress size={20} /> : null}
         >
           {loading ? 'Updating...' : 'Update Product'}

@@ -4,7 +4,6 @@ const brandSchema = new mongoose.Schema({
   name: {
     type: String,
     required: [true, 'Brand name is required'],
-    unique: true,
     trim: true,
     maxlength: [100, 'Brand name cannot exceed 100 characters']
   },

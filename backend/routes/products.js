@@ -6,6 +6,7 @@ const Brand = require('../models/Brand');
 const { auth, authorize } = require('../middleware/auth');
 const { upload, handleMulterError } = require('../middleware/upload');
 const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 
 const router = express.Router();
 
@@ -103,6 +104,7 @@ router.get('/', auth, async (req, res) => {
               { phase: searchRegex },
               { hp: isNaN(parseFloat(search)) ? null : parseFloat(search) },
               { maxHead: isNaN(parseFloat(search)) ? null : parseFloat(search) },
+              { maxFlow: isNaN(parseFloat(search)) ? null : parseFloat(search) },
               { watt: isNaN(parseFloat(search)) ? null : parseFloat(search) },
               { price: isNaN(parseFloat(search)) ? null : parseFloat(search) },
               { 'category.name': searchRegex },
@@ -219,6 +221,7 @@ router.post('/', [
   body('hp').isNumeric().withMessage('HP must be a number'),
   body('outlet').trim().notEmpty().withMessage('Outlet is required'),
   body('maxHead').isNumeric().withMessage('Max head must be a number'),
+  body('maxFlow').isNumeric().withMessage('Max flow must be a number'),
   body('watt').isNumeric().withMessage('Watt must be a number'),
   body('phase').isIn(['1 Phase', '3 Phase']).withMessage('Phase must be 1 Phase or 3 Phase'),
   body('price').if((value, { req }) => req.user.role === 'admin').isNumeric().withMessage('Price must be a number')
@@ -233,7 +236,7 @@ router.post('/', [
       });
     }
 
-    const { category, brand, modelNumber, hp, outlet, maxHead, watt, phase, price } = req.body;
+    const { category, brand, modelNumber, hp, outlet, maxHead, maxFlow, watt, phase, price } = req.body;
 
     // Verify category and brand exist
     const categoryExists = await Category.findById(category);
@@ -253,6 +256,7 @@ router.post('/', [
       hp: Number(hp),
       outlet,
       maxHead: Number(maxHead),
+      maxFlow: Number(maxFlow),
       watt: Number(watt),
       phase,
       createdBy: req.user._id
@@ -313,6 +317,7 @@ router.put('/:id', [
   body('hp').optional().isNumeric().withMessage('HP must be a number'),
   body('outlet').optional().trim().notEmpty().withMessage('Outlet cannot be empty'),
   body('maxHead').optional().isNumeric().withMessage('Max head must be a number'),
+  body('maxFlow').optional().isNumeric().withMessage('Max flow must be a number'),
   body('watt').optional().isNumeric().withMessage('Watt must be a number'),
   body('phase').optional().isIn(['1 Phase', '3 Phase']).withMessage('Phase must be 1 Phase or 3 Phase'),
   body('price').if((value, { req }) => req.user.role === 'admin').optional().isNumeric().withMessage('Price must be a number')
@@ -336,7 +341,7 @@ router.put('/:id', [
       });
     }
 
-    const { category, brand, modelNumber, hp, outlet, maxHead, watt, phase, price } = req.body;
+    const { category, brand, modelNumber, hp, outlet, maxHead, maxFlow, watt, phase, price } = req.body;
 
     // Verify category and brand exist if provided
     if (category) {
@@ -366,6 +371,7 @@ router.put('/:id', [
     if (hp) product.hp = Number(hp);
     if (outlet) product.outlet = outlet;
     if (maxHead) product.maxHead = Number(maxHead);
+    if (maxFlow) product.maxFlow = Number(maxFlow);
     if (watt) product.watt = Number(watt);
     if (phase) product.phase = phase;
 
@@ -411,7 +417,7 @@ router.put('/:id', [
 });
 
 // @route   DELETE /api/products/:id
-// @desc    Delete product (Admin only)
+// @desc    Delete product (Admin only) - Hard delete from database
 // @access  Private (Admin)
 router.delete('/:id', auth, authorize(['admin']), async (req, res) => {
   try {
@@ -424,14 +430,12 @@ router.delete('/:id', auth, authorize(['admin']), async (req, res) => {
       });
     }
 
-    // Soft delete
-    product.isActive = false;
-    product.updatedBy = req.user._id;
-    await product.save();
+    // Hard delete - completely remove from database
+    await Product.findByIdAndDelete(req.params.id);
 
     res.json({
       success: true,
-      message: 'Product deleted successfully'
+      message: 'Product deleted permanently from database'
     });
   } catch (error) {
     console.error('Delete product error:', error);
@@ -483,13 +487,31 @@ router.post('/bulk-upload',
       }
 
       console.log('✅ Validating headers...');
-      // Validate header format
-      const expectedHeaders = ['category', 'brand', 'model number', 'HP', 'outlet', 'max head', 'watt', 'phase', 'price (rs.)'];
-      const actualHeaders = Object.keys(data[0]).map(h => h.toLowerCase());
+      // Validate header format - more flexible matching
+      const expectedHeaders = ['category', 'brand', 'model number', 'hp', 'outlet', 'max head', 'max flow', 'watt', 'phase', 'price'];
+      const actualHeaders = Object.keys(data[0]).map(h => h.toLowerCase().trim());
       
-      const missingHeaders = expectedHeaders.filter(h => 
-        !actualHeaders.some(ah => ah.includes(h.toLowerCase()))
-      );
+      console.log('Expected headers:', expectedHeaders);
+      console.log('Actual headers:', actualHeaders);
+      
+      const missingHeaders = expectedHeaders.filter(expectedHeader => {
+        return !actualHeaders.some(actualHeader => {
+          // More flexible matching for variations
+          if (expectedHeader === 'model number') {
+            return actualHeader.includes('model') && actualHeader.includes('number');
+          }
+          if (expectedHeader === 'max head') {
+            return actualHeader.includes('max') && actualHeader.includes('head');
+          }
+          if (expectedHeader === 'max flow') {
+            return actualHeader.includes('max') && actualHeader.includes('flow');
+          }
+          if (expectedHeader === 'price') {
+            return actualHeader.includes('price');
+          }
+          return actualHeader.includes(expectedHeader);
+        });
+      });
 
       if (missingHeaders.length > 0) {
         console.log('❌ Missing headers:', missingHeaders);
@@ -524,19 +546,34 @@ router.post('/bulk-upload',
         console.log(`🔄 Processing row ${rowNum}:`, row);
 
         try {
-          // Map fields (case-insensitive)
-          const categoryName = row.category || row.Category;
-          const brandName = row.brand || row.Brand;
-          const modelNumber = row['model number'] || row['Model Number'] || row.modelNumber;
-          const hp = row.HP || row.hp;
-          const outlet = row.outlet || row.Outlet;
-          const maxHead = row['max head'] || row['Max Head'] || row.maxHead;
-          const watt = row.watt || row.Watt;
-          const phase = row.phase || row.Phase;
-          const price = row['price (rs.)'] || row['Price (Rs.)'] || row.price || row.Price;
+          // Map fields (case-insensitive and flexible)
+          const getFieldValue = (fieldVariations) => {
+            for (const variation of fieldVariations) {
+              const value = row[variation];
+              if (value !== undefined && value !== null && value !== '') {
+                return String(value).trim();
+              }
+            }
+            return null;
+          };
+
+          const categoryName = getFieldValue(['category', 'Category', 'CATEGORY']);
+          const brandName = getFieldValue(['brand', 'Brand', 'BRAND']);
+          const modelNumber = getFieldValue(['model number', 'Model Number', 'MODEL NUMBER', 'modelNumber', 'ModelNumber']);
+          const hp = getFieldValue(['hp', 'HP', 'Hp', 'hP']);
+          const outlet = getFieldValue(['outlet', 'Outlet', 'OUTLET']);
+          const maxHead = getFieldValue(['max head', 'Max Head', 'MAX HEAD', 'maxHead', 'MaxHead']);
+          const maxFlow = getFieldValue(['max flow', 'Max Flow', 'MAX FLOW', 'maxFlow', 'MaxFlow']);
+          const watt = getFieldValue(['watt', 'Watt', 'WATT']);
+          const phase = getFieldValue(['phase', 'Phase', 'PHASE']);
+          const price = getFieldValue(['price (rs.)', 'Price (Rs.)', 'PRICE (RS.)', 'price', 'Price', 'PRICE']);
+
+          console.log(`Row ${rowNum} extracted values:`, {
+            categoryName, brandName, modelNumber, hp, outlet, maxHead, maxFlow, watt, phase, price
+          });
 
           // Validate required fields
-          if (!categoryName || !brandName || !modelNumber || !hp || !outlet || !maxHead || !watt || !phase) {
+          if (!categoryName || !brandName || !modelNumber || !hp || !outlet || !maxHead || !maxFlow || !watt || !phase) {
             const errorMsg = 'Missing required fields';
             console.log(`❌ Row ${rowNum} error:`, errorMsg);
             results.errors.push({
@@ -588,6 +625,7 @@ router.post('/bulk-upload',
             hp: Number(hp),
             outlet: String(outlet).trim(),
             maxHead: Number(maxHead),
+            maxFlow: Number(maxFlow),
             watt: Number(watt),
             phase,
             createdBy: req.user._id
@@ -652,45 +690,179 @@ router.post('/bulk-upload',
 );
 
 // @route   GET /api/products/download-template
-// @desc    Download Excel template
+// @desc    Download Excel template with dropdowns
 // @access  Private
-router.get('/download-template', auth, (req, res) => {
+router.get('/download-template', auth, async (req, res) => {
   try {
-    // Create sample data
-    const sampleData = [
-      {
-        'category': 'Submersible',
-        'brand': 'Pentax',
-        'model number': 'SUB-NEW-001',
-        'HP': 1,
-        'outlet': '1 inch',
-        'max head': 50,
-        'watt': 750,
-        'phase': '1 Phase',
-        'price (Rs.)': 15000
-      },
-      {
-        'category': 'Centrifugal',
-        'brand': 'Deep Tec',
-        'model number': 'CENT-NEW-001',
-        'HP': 2,
-        'outlet': '2 inch',
-        'max head': 35,
-        'watt': 1500,
-        'phase': '3 Phase',
-        'price (Rs.)': 25000
-      }
+    // Fetch categories and brands from database
+    const categories = await Category.find({ isActive: true }).select('name').sort({ name: 1 });
+    const brands = await Brand.find({ isActive: true }).select('name').sort({ name: 1 });
+
+    // Create a new workbook and worksheet
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Products');
+
+    // Define the columns (matching bulk upload expected headers)
+    worksheet.columns = [
+      { header: 'category', key: 'category', width: 15 },
+      { header: 'brand', key: 'brand', width: 15 },
+      { header: 'model number', key: 'modelNumber', width: 20 },
+      { header: 'hp', key: 'hp', width: 10 },
+      { header: 'outlet', key: 'outlet', width: 12 },
+      { header: 'max head', key: 'maxHead', width: 15 },
+      { header: 'max flow', key: 'maxFlow', width: 15 },
+      { header: 'watt', key: 'watt', width: 10 },
+      { header: 'phase', key: 'phase', width: 12 },
+      { header: 'price (rs.)', key: 'price', width: 15 }
     ];
 
-    // Create workbook and worksheet
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(sampleData);
+    // Add sample data rows
+    worksheet.addRow({
+      category: categories.length > 0 ? categories[0].name : 'Submersible',
+      brand: brands.length > 0 ? brands[0].name : 'Pentax',
+      modelNumber: 'SUB-NEW-001',
+      hp: 1,
+      outlet: '1 inch',
+      maxHead: 50,
+      maxFlow: 120,
+      watt: 750,
+      phase: '1 Phase',
+      price: 15000
+    });
 
-    // Add worksheet to workbook
-    XLSX.utils.book_append_sheet(wb, ws, 'Products');
+    worksheet.addRow({
+      category: categories.length > 1 ? categories[1].name : 'Centrifugal',
+      brand: brands.length > 1 ? brands[1].name : 'Deep Tec',
+      modelNumber: 'CENT-NEW-001',
+      hp: 2,
+      outlet: '2 inch',
+      maxHead: 35,
+      maxFlow: 200,
+      watt: 1500,
+      phase: '3 Phase',
+      price: 25000
+    });
+
+    // Add more empty rows for data entry (rows 4-100)
+    for (let i = 4; i <= 100; i++) {
+      worksheet.addRow({});
+    }
+
+    // Create category dropdown validation
+    if (categories.length > 0) {
+      const categoryNames = categories.map(cat => cat.name);
+      worksheet.dataValidations.add('A2:A100', {
+        type: 'list',
+        allowBlank: false,
+        formulae: [`"${categoryNames.join(',')}"`],
+        showErrorMessage: true,
+        errorTitle: 'Invalid Category',
+        error: 'Please select a category from the dropdown list.'
+      });
+    }
+
+    // Create brand dropdown validation
+    if (brands.length > 0) {
+      const brandNames = brands.map(brand => brand.name);
+      worksheet.dataValidations.add('B2:B100', {
+        type: 'list',
+        allowBlank: false,
+        formulae: [`"${brandNames.join(',')}"`],
+        showErrorMessage: true,
+        errorTitle: 'Invalid Brand',
+        error: 'Please select a brand from the dropdown list.'
+      });
+    }
+
+    // Create phase dropdown validation (column H is now I)
+    worksheet.dataValidations.add('I2:I100', {
+      type: 'list',
+      allowBlank: false,
+      formulae: ['"1 Phase,3 Phase"'],
+      showErrorMessage: true,
+      errorTitle: 'Invalid Phase',
+      error: 'Please select either "1 Phase" or "3 Phase".'
+    });
+
+    // Add number validation for numeric fields
+    worksheet.dataValidations.add('D2:D100', { // hp
+      type: 'decimal',
+      operator: 'greaterThanOrEqual',
+      formulae: [0],
+      allowBlank: true,
+      showErrorMessage: true,
+      errorTitle: 'Invalid HP',
+      error: 'HP must be a positive number.'
+    });
+
+    worksheet.dataValidations.add('F2:F100', { // max head
+      type: 'decimal',
+      operator: 'greaterThanOrEqual',
+      formulae: [0],
+      allowBlank: true,
+      showErrorMessage: true,
+      errorTitle: 'Invalid Max Head',
+      error: 'Max Head must be a positive number.'
+    });
+
+    worksheet.dataValidations.add('G2:G100', { // max flow
+      type: 'decimal',
+      operator: 'greaterThanOrEqual',
+      formulae: [0],
+      allowBlank: true,
+      showErrorMessage: true,
+      errorTitle: 'Invalid Max Flow',
+      error: 'Max Flow must be a positive number.'
+    });
+
+    worksheet.dataValidations.add('H2:H100', { // watt
+      type: 'whole',
+      operator: 'greaterThanOrEqual',
+      formulae: [0],
+      allowBlank: true,
+      showErrorMessage: true,
+      errorTitle: 'Invalid Watt',
+      error: 'Watt must be a positive whole number.'
+    });
+
+    worksheet.dataValidations.add('J2:J100', { // price (rs.)
+      type: 'decimal',
+      operator: 'greaterThan',
+      formulae: [0],
+      allowBlank: false,
+      showErrorMessage: true,
+      errorTitle: 'Invalid Price',
+      error: 'Price must be a positive number greater than 0.'
+    });
+
+    // Style the header row
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' }
+    };
+
+    // Add borders to all cells with data
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber <= 100) {
+        row.eachCell((cell) => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+        });
+      }
+    });
+
+    // Freeze the header row
+    worksheet.views = [{ state: 'frozen', ySplit: 1 }];
 
     // Generate buffer
-    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const buffer = await workbook.xlsx.writeBuffer();
 
     // Set response headers
     res.setHeader('Content-Disposition', 'attachment; filename=product-template.xlsx');
@@ -774,6 +946,7 @@ router.get('/export', auth, async (req, res) => {
               { phase: searchRegex },
               { hp: isNaN(parseFloat(search)) ? null : parseFloat(search) },
               { maxHead: isNaN(parseFloat(search)) ? null : parseFloat(search) },
+              { maxFlow: isNaN(parseFloat(search)) ? null : parseFloat(search) },
               { watt: isNaN(parseFloat(search)) ? null : parseFloat(search) },
               { price: isNaN(parseFloat(search)) ? null : parseFloat(search) },
               { 'category.name': searchRegex },
@@ -798,6 +971,7 @@ router.get('/export', auth, async (req, res) => {
       'HP': product.hp,
       'Outlet': product.outlet,
       'Max Head': product.maxHead,
+      'Max Flow': product.maxFlow,
       'Watt': product.watt,
       'Phase': product.phase,
       'Price (Rs.)': req.user.role === 'employee' ? 'N/A' : product.price

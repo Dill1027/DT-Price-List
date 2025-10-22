@@ -11,6 +11,7 @@ import CategoryDetails from './pages/CategoryDetails';
 import AdminPanel from './pages/AdminPanel';
 import SearchResults from './pages/SearchResults';
 import ProtectedRoute from './components/common/ProtectedRoute';
+import ErrorBoundary from './components/common/ErrorBoundary';
 
 function App() {
   const { isLoading } = useAuth();
@@ -29,59 +30,61 @@ function App() {
   }
 
   return (
-    <Routes>
-      {/* Public Routes */}
-      <Route path="/login" element={<Login />} />
-      
-      {/* Protected Routes */}
-      <Route 
-        path="/" 
-        element={
-          <ProtectedRoute>
-            <Home />
-          </ProtectedRoute>
-        } 
-      />
-      
-      <Route 
-        path="/profile" 
-        element={
-          <ProtectedRoute>
-            <Profile />
-          </ProtectedRoute>
-        } 
-      />
-      
-      <Route 
-        path="/category/:categoryId" 
-        element={
-          <ProtectedRoute>
-            <CategoryDetails />
-          </ProtectedRoute>
-        } 
-      />
-      
-      <Route 
-        path="/admin" 
-        element={
-          <ProtectedRoute>
-            <AdminPanel />
-          </ProtectedRoute>
-        } 
-      />
-      
-      <Route 
-        path="/search" 
-        element={
-          <ProtectedRoute>
-            <SearchResults />
-          </ProtectedRoute>
-        } 
-      />
-      
-      {/* Catch all route */}
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <ErrorBoundary>
+      <Routes>
+        {/* Public Routes */}
+        <Route path="/login" element={<Login />} />
+        
+        {/* Protected Routes */}
+        <Route 
+          path="/" 
+          element={
+            <ProtectedRoute>
+              <Home />
+            </ProtectedRoute>
+          } 
+        />
+        
+        <Route 
+          path="/profile" 
+          element={
+            <ProtectedRoute>
+              <Profile />
+            </ProtectedRoute>
+          } 
+        />
+        
+        <Route 
+          path="/category/:categoryId" 
+          element={
+            <ProtectedRoute>
+              <CategoryDetails />
+            </ProtectedRoute>
+          } 
+        />
+        
+        <Route 
+          path="/admin" 
+          element={
+            <ProtectedRoute>
+              <AdminPanel />
+            </ProtectedRoute>
+          } 
+        />
+        
+        <Route 
+          path="/search" 
+          element={
+            <ProtectedRoute>
+              <SearchResults />
+            </ProtectedRoute>
+          } 
+        />
+        
+        {/* Catch all route */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </ErrorBoundary>
   );
 }
 

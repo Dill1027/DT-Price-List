@@ -21,6 +21,12 @@ import {
   TextField,
   CircularProgress,
   Chip,
+  useTheme,
+  useMediaQuery,
+  Card,
+  CardContent,
+  CardActions,
+  Divider,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -35,6 +41,8 @@ import Footer from '../components/common/Footer';
 
 const AdminPanel = () => {
   const { user } = useAuth();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [tabValue, setTabValue] = useState(0);
   const [categories, setCategories] = useState([]);
   const [brands, setBrands] = useState([]);
@@ -65,6 +73,7 @@ const AdminPanel = () => {
       setCategories(categoriesRes.data.data);
       setBrands(brandsRes.data.data);
     } catch (error) {
+      console.error('Failed to fetch data:', error);
       toast.error('Failed to fetch data');
     } finally {
       setLoading(false);
@@ -89,43 +98,64 @@ const AdminPanel = () => {
     setOpenDialog(true);
   };
 
-  const handleSave = async () => {
+  // Helper functions to reduce complexity
+  const validateFormData = (formData) => {
     if (!formData.name.trim()) {
       toast.error('Name is required');
+      return false;
+    }
+    return true;
+  };
+
+  const getEndpointConfig = (dialogType) => {
+    const isCategory = dialogType.includes('category');
+    const isEdit = dialogType.includes('edit');
+    const endpoint = isCategory ? '/api/categories' : '/api/brands';
+    const itemType = isCategory ? 'Category' : 'Brand';
+    
+    return { isCategory, isEdit, endpoint, itemType };
+  };
+
+  const updateLocalState = (config, response, currentItem) => {
+    const { isCategory, isEdit } = config;
+    
+    if (isEdit) {
+      if (isCategory) {
+        setCategories(prev => prev.map(cat => 
+          cat._id === currentItem._id ? response.data.data : cat
+        ));
+      } else {
+        setBrands(prev => prev.map(brand => 
+          brand._id === currentItem._id ? response.data.data : brand
+        ));
+      }
+    } else if (isCategory) {
+      setCategories(prev => [...prev, response.data.data]);
+    } else {
+      setBrands(prev => [...prev, response.data.data]);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!validateFormData(formData)) {
       return;
     }
 
     setSaving(true);
     try {
+      const config = getEndpointConfig(dialogType);
       let response;
-      const isCategory = dialogType.includes('category');
-      const isEdit = dialogType.includes('edit');
-      const endpoint = isCategory ? '/api/categories' : '/api/brands';
 
-      if (isEdit) {
-        response = await axios.put(`${endpoint}/${currentItem._id}`, formData);
-        // Update local state
-        if (isCategory) {
-          setCategories(prev => prev.map(cat => 
-            cat._id === currentItem._id ? response.data.data : cat
-          ));
-        } else {
-          setBrands(prev => prev.map(brand => 
-            brand._id === currentItem._id ? response.data.data : brand
-          ));
-        }
-        toast.success(`${isCategory ? 'Category' : 'Brand'} updated successfully`);
+      if (config.isEdit) {
+        response = await axios.put(`${config.endpoint}/${currentItem._id}`, formData);
       } else {
-        response = await axios.post(endpoint, formData);
-        // Add to local state
-        if (isCategory) {
-          setCategories(prev => [...prev, response.data.data]);
-        } else {
-          setBrands(prev => [...prev, response.data.data]);
-        }
-        toast.success(`${isCategory ? 'Category' : 'Brand'} added successfully`);
+        response = await axios.post(config.endpoint, formData);
       }
 
+      updateLocalState(config, response, currentItem);
+      
+      const action = config.isEdit ? 'updated' : 'added';
+      toast.success(`${config.itemType} ${action} successfully`);
       setOpenDialog(false);
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to save');
@@ -149,12 +179,9 @@ const AdminPanel = () => {
       
       await axios.delete(`${endpoint}/${itemToDelete._id}`);
       
-      // Remove from local state
-      if (isCategory) {
-        setCategories(prev => prev.filter(cat => cat._id !== itemToDelete._id));
-      } else {
-        setBrands(prev => prev.filter(brand => brand._id !== itemToDelete._id));
-      }
+      // Refresh data from server instead of manually removing from local state
+      // This ensures we get the updated data (category will be hidden since backend returns only active items)
+      await fetchData();
       
       toast.success(`${isCategory ? 'Category' : 'Brand'} deleted successfully`);
       setDeleteDialog(false);
@@ -165,6 +192,110 @@ const AdminPanel = () => {
       setDeleting(false);
     }
   };
+
+  // Render helper functions to reduce complexity
+  const renderMobileCards = (items, itemType) => (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {items.map((item) => (
+        <Card key={item._id} variant="outlined">
+          <CardContent sx={{ pb: 1 }}>
+            <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+              {item.name}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              {item.description || 'No description'}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Created: {new Date(item.createdAt).toLocaleDateString()}
+            </Typography>
+          </CardContent>
+          <Divider />
+          <CardActions sx={{ justifyContent: 'flex-end', p: 1 }}>
+            <IconButton
+              size="small"
+              onClick={() => openEditDialog(`edit-${itemType}`, item)}
+              color="primary"
+            >
+              <EditIcon />
+            </IconButton>
+            <IconButton
+              size="small"
+              color="error"
+              onClick={() => openDeleteDialog(item, itemType)}
+            >
+              <DeleteIcon />
+            </IconButton>
+          </CardActions>
+        </Card>
+      ))}
+    </Box>
+  );
+
+  const renderDesktopTable = (items, itemType) => (
+    <TableContainer>
+      <Table>
+        <TableHead>
+          <TableRow>
+            <TableCell>Name</TableCell>
+            <TableCell>Description</TableCell>
+            <TableCell>Created</TableCell>
+            <TableCell>Actions</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {items.map((item) => (
+            <TableRow key={item._id}>
+              <TableCell>{item.name}</TableCell>
+              <TableCell>{item.description || '-'}</TableCell>
+              <TableCell>{new Date(item.createdAt).toLocaleDateString()}</TableCell>
+              <TableCell>
+                <IconButton
+                  size="small"
+                  onClick={() => openEditDialog(`edit-${itemType}`, item)}
+                >
+                  <EditIcon />
+                </IconButton>
+                <IconButton
+                  size="small"
+                  color="error"
+                  onClick={() => openDeleteDialog(item, itemType)}
+                >
+                  <DeleteIcon />
+                </IconButton>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </TableContainer>
+  );
+
+  const renderTabHeader = (title, addButtonText, onAdd) => (
+    <Box sx={{ 
+      display: 'flex', 
+      justifyContent: 'space-between', 
+      mb: 3,
+      flexDirection: { xs: 'column', sm: 'row' },
+      gap: { xs: 2, sm: 0 },
+      alignItems: { xs: 'stretch', sm: 'center' }
+    }}>
+      <Typography 
+        variant={isMobile ? "subtitle1" : "h6"}
+        sx={{ fontWeight: 'bold' }}
+      >
+        {title}
+      </Typography>
+      <Button
+        variant="contained"
+        startIcon={<AddIcon />}
+        onClick={onAdd}
+        size={isMobile ? "small" : "medium"}
+        fullWidth={isMobile}
+      >
+        {addButtonText}
+      </Button>
+    </Box>
+  );
 
   if (user?.role !== 'admin') {
     return (
@@ -192,127 +323,71 @@ const AdminPanel = () => {
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
       <Header showSearch={false} />
       
-      <Container maxWidth="lg" sx={{ mt: 4, mb: 4, flexGrow: 1 }}>
+      <Container maxWidth="lg" sx={{ mt: { xs: 2, md: 4 }, mb: 4, flexGrow: 1, px: { xs: 2, sm: 3 } }}>
         <Box sx={{ mb: 3 }}>
-          <Typography variant="h4" component="h1" gutterBottom>
+          <Typography 
+            variant={isMobile ? "h5" : "h4"} 
+            component="h1" 
+            gutterBottom
+            sx={{ fontSize: { xs: '1.5rem', sm: '2rem' } }}
+          >
             Admin Panel
           </Typography>
           <Chip 
             label="Administrator"
             color="error"
+            size={isMobile ? "small" : "medium"}
             sx={{ mb: 2 }}
           />
         </Box>
 
-        <Paper sx={{ width: '100%' }}>
-          <Tabs value={tabValue} onChange={handleTabChange} sx={{ borderBottom: 1, borderColor: 'divider' }}>
+        <Paper sx={{ width: '100%', overflow: 'hidden' }}>
+          <Tabs 
+            value={tabValue} 
+            onChange={handleTabChange} 
+            sx={{ 
+              borderBottom: 1, 
+              borderColor: 'divider',
+              '& .MuiTab-root': {
+                fontSize: { xs: '0.8rem', sm: '0.875rem' },
+                minWidth: { xs: 80, sm: 120 },
+              }
+            }}
+            variant={isMobile ? "fullWidth" : "standard"}
+          >
             <Tab label={`Categories (${categories.length})`} />
             <Tab label={`Brands (${brands.length})`} />
           </Tabs>
 
           {/* Categories Tab */}
           {tabValue === 0 && (
-            <Box sx={{ p: 3 }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
-                <Typography variant="h6">Manage Categories</Typography>
-                <Button
-                  variant="contained"
-                  startIcon={<AddIcon />}
-                  onClick={() => openAddDialog('add-category')}
-                >
-                  Add Category
-                </Button>
-              </Box>
-
-              <TableContainer>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Name</TableCell>
-                      <TableCell>Description</TableCell>
-                      <TableCell>Created</TableCell>
-                      <TableCell>Actions</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {categories.map((category) => (
-                      <TableRow key={category._id}>
-                        <TableCell>{category.name}</TableCell>
-                        <TableCell>{category.description || '-'}</TableCell>
-                        <TableCell>{new Date(category.createdAt).toLocaleDateString()}</TableCell>
-                        <TableCell>
-                          <IconButton
-                            size="small"
-                            onClick={() => openEditDialog('edit-category', category)}
-                          >
-                            <EditIcon />
-                          </IconButton>
-                          <IconButton
-                            size="small"
-                            color="error"
-                            onClick={() => openDeleteDialog(category, 'category')}
-                          >
-                            <DeleteIcon />
-                          </IconButton>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
+            <Box sx={{ p: { xs: 2, sm: 3 } }}>
+              {renderTabHeader(
+                'Manage Categories', 
+                'Add Category', 
+                () => openAddDialog('add-category')
+              )}
+              
+              {isMobile ? 
+                renderMobileCards(categories, 'category') : 
+                renderDesktopTable(categories, 'category')
+              }
             </Box>
           )}
 
           {/* Brands Tab */}
           {tabValue === 1 && (
-            <Box sx={{ p: 3 }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
-                <Typography variant="h6">Manage Brands</Typography>
-                <Button
-                  variant="contained"
-                  startIcon={<AddIcon />}
-                  onClick={() => openAddDialog('add-brand')}
-                >
-                  Add Brand
-                </Button>
-              </Box>
-
-              <TableContainer>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Name</TableCell>
-                      <TableCell>Description</TableCell>
-                      <TableCell>Created</TableCell>
-                      <TableCell>Actions</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {brands.map((brand) => (
-                      <TableRow key={brand._id}>
-                        <TableCell>{brand.name}</TableCell>
-                        <TableCell>{brand.description || '-'}</TableCell>
-                        <TableCell>{new Date(brand.createdAt).toLocaleDateString()}</TableCell>
-                        <TableCell>
-                          <IconButton
-                            size="small"
-                            onClick={() => openEditDialog('edit-brand', brand)}
-                          >
-                            <EditIcon />
-                          </IconButton>
-                          <IconButton
-                            size="small"
-                            color="error"
-                            onClick={() => openDeleteDialog(brand, 'brand')}
-                          >
-                            <DeleteIcon />
-                          </IconButton>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
+            <Box sx={{ p: { xs: 2, sm: 3 } }}>
+              {renderTabHeader(
+                'Manage Brands', 
+                'Add Brand', 
+                () => openAddDialog('add-brand')
+              )}
+              
+              {isMobile ? 
+                renderMobileCards(brands, 'brand') : 
+                renderDesktopTable(brands, 'brand')
+              }
             </Box>
           )}
         </Paper>
@@ -321,7 +396,13 @@ const AdminPanel = () => {
       <Footer />
 
       {/* Add/Edit Dialog */}
-      <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
+      <Dialog 
+        open={openDialog} 
+        onClose={() => setOpenDialog(false)} 
+        maxWidth="sm" 
+        fullWidth
+        fullScreen={isMobile}
+      >
         <DialogTitle>
           {dialogType.includes('add') ? 'Add' : 'Edit'} {dialogType.includes('category') ? 'Category' : 'Brand'}
         </DialogTitle>
@@ -356,7 +437,13 @@ const AdminPanel = () => {
       </Dialog>
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialog} onClose={() => setDeleteDialog(false)} maxWidth="sm" fullWidth>
+      <Dialog 
+        open={deleteDialog} 
+        onClose={() => setDeleteDialog(false)} 
+        maxWidth="sm" 
+        fullWidth
+        fullScreen={isMobile}
+      >
         <DialogTitle>Delete {itemToDelete?.type === 'category' ? 'Category' : 'Brand'}</DialogTitle>
         <DialogContent>
           <Typography>

@@ -19,6 +19,8 @@ import {
   IconButton,
   Menu,
   MenuItem,
+  useTheme,
+  useMediaQuery,
 } from '@mui/material';
 import { 
   Add as AddIcon,
@@ -35,6 +37,8 @@ import Footer from '../components/common/Footer';
 const Home = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [categories, setCategories] = useState([]);
   const [filteredCategories, setFilteredCategories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -57,6 +61,7 @@ const Home = () => {
       setCategories(response.data.data);
       setFilteredCategories(response.data.data);
     } catch (error) {
+      console.error('Failed to fetch categories:', error);
       toast.error('Failed to fetch categories');
     } finally {
       setLoading(false);
@@ -127,9 +132,11 @@ const Home = () => {
     setDeleting(true);
     try {
       await axios.delete(`/api/categories/${categoryToDelete._id}`);
-      const updatedCategories = categories.filter(cat => cat._id !== categoryToDelete._id);
-      setCategories(updatedCategories);
-      setFilteredCategories(updatedCategories);
+      
+      // Refresh categories from server instead of manually filtering
+      // This ensures we get the updated data (deleted category will be hidden since backend returns only active items)
+      await fetchCategories();
+      
       setDeleteDialog(false);
       setCategoryToDelete(null);
       toast.success('Category deleted successfully');
@@ -159,9 +166,14 @@ const Home = () => {
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
       <Header onSearch={handleSearch} />
       
-      <Container maxWidth="lg" sx={{ mt: 4, mb: 4, flexGrow: 1 }}>
-        <Box sx={{ mb: 4, textAlign: 'center' }}>
-          <Typography variant="h4" component="h1" gutterBottom>
+      <Container maxWidth="lg" sx={{ mt: { xs: 2, md: 4 }, mb: 4, flexGrow: 1, px: { xs: 2, sm: 3 } }}>
+        <Box sx={{ mb: { xs: 3, md: 4 }, textAlign: 'center' }}>
+          <Typography 
+            variant={isMobile ? "h5" : "h4"} 
+            component="h1" 
+            gutterBottom
+            sx={{ px: { xs: 1, sm: 0 } }}
+          >
             Price List Categories
           </Typography>
           <Typography variant="subtitle1" color="text.secondary">
@@ -176,17 +188,17 @@ const Home = () => {
           )}
         </Box>
 
-        <Grid container spacing={3}>
+        <Grid container spacing={{ xs: 2, sm: 3 }} sx={{ mb: 3 }}>
           {filteredCategories.map((category) => (
-            <Grid item xs={12} sm={6} md={4} key={category._id}>
+            <Grid item xs={12} sm={6} md={4} lg={3} key={category._id}>
               <Card 
                 sx={{ 
                   height: '100%',
                   transition: 'transform 0.2s, box-shadow 0.2s',
                   position: 'relative',
                   '&:hover': {
-                    transform: 'translateY(-4px)',
-                    boxShadow: 4,
+                    transform: isMobile ? 'none' : 'translateY(-4px)',
+                    boxShadow: isMobile ? 2 : 4,
                   },
                 }}
               >
@@ -213,16 +225,42 @@ const Home = () => {
                   onClick={() => handleCategoryClick(category._id)}
                   sx={{ height: '100%' }}
                 >
-                  <CardContent sx={{ p: 3, pr: canAddCategory ? 5 : 3 }}>
-                    <Typography variant="h6" component="h2" gutterBottom>
+                  <CardContent sx={{ p: { xs: 2, sm: 3 }, pr: canAddCategory ? { xs: 4, sm: 5 } : { xs: 2, sm: 3 } }}>
+                    <Typography 
+                      variant={isMobile ? "subtitle1" : "h6"} 
+                      component="h2" 
+                      gutterBottom
+                      sx={{ 
+                        fontWeight: 'bold',
+                        fontSize: { xs: '1rem', sm: '1.25rem' }
+                      }}
+                    >
                       {category.name}
                     </Typography>
                     {category.description && (
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography 
+                        variant="body2" 
+                        color="text.secondary"
+                        sx={{ 
+                          fontSize: { xs: '0.8rem', sm: '0.875rem' },
+                          lineHeight: 1.4,
+                          display: '-webkit-box',
+                          WebkitLineClamp: isMobile ? 2 : 3,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                        }}
+                      >
                         {category.description}
                       </Typography>
                     )}
-                    <Typography variant="caption" display="block" sx={{ mt: 2 }}>
+                    <Typography 
+                      variant="caption" 
+                      display="block" 
+                      sx={{ 
+                        mt: { xs: 1.5, sm: 2 },
+                        fontSize: { xs: '0.7rem', sm: '0.75rem' }
+                      }}
+                    >
                       Created: {new Date(category.createdAt).toLocaleDateString()}
                     </Typography>
                   </CardContent>
@@ -233,11 +271,15 @@ const Home = () => {
         </Grid>
 
         {filteredCategories.length === 0 && categories.length > 0 && (
-          <Box sx={{ textAlign: 'center', mt: 4 }}>
+          <Box sx={{ textAlign: 'center', mt: 4, px: { xs: 2, sm: 0 } }}>
             <Typography variant="h6" color="text.secondary" gutterBottom>
               No categories found
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+            <Typography 
+              variant="body2" 
+              color="text.secondary"
+              sx={{ fontSize: { xs: '0.85rem', sm: '0.875rem' } }}
+            >
               Press <strong>Enter</strong> in the search bar to search for products instead
             </Typography>
           </Box>
@@ -253,8 +295,9 @@ const Home = () => {
           aria-label="add category"
           sx={{
             position: 'fixed',
-            bottom: 16,
-            right: 16,
+            bottom: { xs: 20, sm: 16 },
+            right: { xs: 20, sm: 16 },
+            zIndex: 1000,
           }}
           onClick={() => setOpenDialog(true)}
         >
@@ -276,7 +319,13 @@ const Home = () => {
       </Menu>
 
       {/* Add Category Dialog */}
-      <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
+      <Dialog 
+        open={openDialog} 
+        onClose={() => setOpenDialog(false)} 
+        maxWidth="sm" 
+        fullWidth
+        fullScreen={isMobile}
+      >
         <DialogTitle>Add New Category</DialogTitle>
         <DialogContent>
           <TextField
@@ -309,7 +358,13 @@ const Home = () => {
       </Dialog>
 
       {/* Delete Category Confirmation Dialog */}
-      <Dialog open={deleteDialog} onClose={handleDeleteCancel} maxWidth="sm" fullWidth>
+      <Dialog 
+        open={deleteDialog} 
+        onClose={handleDeleteCancel} 
+        maxWidth="sm" 
+        fullWidth
+        fullScreen={isMobile}
+      >
         <DialogTitle>Delete Category</DialogTitle>
         <DialogContent>
           <Typography>

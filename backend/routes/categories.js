@@ -58,9 +58,10 @@ router.post('/', [
 
     const { name, description } = req.body;
 
-    // Check if category already exists
+    // Check if active category already exists (ignore soft-deleted categories)
     const existingCategory = await Category.findOne({ 
-      name: { $regex: new RegExp(`^${name}$`, 'i') } 
+      name: { $regex: new RegExp(`^${name}$`, 'i') },
+      isActive: true
     });
     
     if (existingCategory) {
@@ -131,11 +132,12 @@ router.put('/:id', [
 
     const { name, description } = req.body;
 
-    // Check if new name is taken by another category
+    // Check if new name is taken by another active category (ignore soft-deleted categories)
     if (name && name !== category.name) {
       const existingCategory = await Category.findOne({ 
         name: { $regex: new RegExp(`^${name}$`, 'i') },
-        _id: { $ne: category._id }
+        _id: { $ne: category._id },
+        isActive: true
       });
       
       if (existingCategory) {

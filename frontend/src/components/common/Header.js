@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import PropTypes from 'prop-types';
 import {
   AppBar,
   Toolbar,
@@ -10,6 +11,13 @@ import {
   Menu,
   MenuItem,
   InputAdornment,
+  Drawer,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -18,15 +26,20 @@ import {
   Logout,
   Person,
   AdminPanelSettings,
+  Menu as MenuIcon,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 
-const Header = ({ onSearch, showSearch = true }) => {
+const Header = ({ onSearch = null, showSearch = true }) => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const [anchorEl, setAnchorEl] = React.useState(null);
-  const [searchTerm, setSearchTerm] = React.useState('');
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const [anchorEl, setAnchorEl] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
 
   const handleProfileMenuOpen = (event) => {
     setAnchorEl(event.currentTarget);
@@ -60,12 +73,6 @@ const Header = ({ onSearch, showSearch = true }) => {
     }
   };
 
-  const handleSearchSubmit = (event) => {
-    if (event.key === 'Enter' && searchTerm.trim()) {
-      navigate(`/search?q=${encodeURIComponent(searchTerm.trim())}`);
-    }
-  };
-
   const handleSearchIconClick = () => {
     if (searchTerm.trim()) {
       navigate(`/search?q=${encodeURIComponent(searchTerm.trim())}`);
@@ -79,43 +86,132 @@ const Header = ({ onSearch, showSearch = true }) => {
   const isMenuOpen = Boolean(anchorEl);
 
   return (
-    <AppBar position="static" elevation={2}>
-      <Toolbar>
-        {/* Logo */}
-        <Box sx={{ display: 'flex', alignItems: 'center', mr: 3 }}>
-          <Typography
-            variant="h6"
-            component="div"
-            sx={{ 
-              fontWeight: 'bold',
-              color: 'white',
-              cursor: 'pointer'
-            }}
-            onClick={handleHomeClick}
-          >
-            Deep Tec
-          </Typography>
-        </Box>
+    <>
+      <AppBar position="static" elevation={2}>
+        <Toolbar>
+          {/* Mobile Menu Button */}
+          {isMobile && (
+            <IconButton
+              color="inherit"
+              edge="start"
+              onClick={() => setMobileMenuOpen(true)}
+              sx={{ mr: 1 }}
+            >
+              <MenuIcon />
+            </IconButton>
+          )}
 
-        {/* Home Button */}
-        <IconButton
-          color="inherit"
-          onClick={handleHomeClick}
-          sx={{ mr: 2 }}
-        >
-          <HomeIcon />
-        </IconButton>
+          {/* Logo */}
+          <Box sx={{ display: 'flex', alignItems: 'center', mr: { xs: 1, md: 3 } }}>
+            <Typography
+              variant="h6"
+              component="div"
+              sx={{ 
+                fontWeight: 'bold',
+                color: 'white',
+                cursor: 'pointer',
+                fontSize: { xs: '1rem', md: '1.25rem' }
+              }}
+              onClick={handleHomeClick}
+            >
+              Deep Tec
+            </Typography>
+          </Box>
 
-        {/* Search Bar */}
-        {showSearch && (
-          <Box sx={{ flexGrow: 1, maxWidth: 600, mx: 2 }}>
+          {/* Desktop Navigation */}
+          {!isMobile && (
+            <IconButton
+              color="inherit"
+              onClick={handleHomeClick}
+              sx={{ mr: 2 }}
+            >
+              <HomeIcon />
+            </IconButton>
+          )}
+
+          {/* Search Bar - Desktop */}
+          {showSearch && !isMobile && (
+            <Box sx={{ flexGrow: 1, maxWidth: 600, mx: 2 }}>
+              <TextField
+                fullWidth
+                variant="outlined"
+                placeholder="Search by Model, Category, Brand, HP, Watt, Outlet, Phase..."
+                value={searchTerm}
+                onChange={handleSearch}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleSearchIconClick();
+                  }
+                }}
+                size="small"
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon 
+                        sx={{ cursor: 'pointer' }}
+                        onClick={handleSearchIconClick}
+                      />
+                    </InputAdornment>
+                  ),
+                  style: { backgroundColor: 'white', borderRadius: 4 }
+                }}
+              />
+            </Box>
+          )}
+
+          {/* Mobile Search Button */}
+          {showSearch && isMobile && (
+            <IconButton
+              color="inherit"
+              onClick={() => setMobileSearchOpen(!mobileSearchOpen)}
+              sx={{ mr: 1 }}
+            >
+              <SearchIcon />
+            </IconButton>
+          )}
+
+          <Box sx={{ flexGrow: 1 }} />
+
+          {/* User Profile */}
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <Typography 
+              variant="body2" 
+              sx={{ 
+                mr: 1, 
+                display: { xs: 'none', sm: 'block' },
+                fontSize: { xs: '0.75rem', md: '0.875rem' }
+              }}
+            >
+              {user?.username}
+            </Typography>
+            <IconButton
+              size={isMobile ? "medium" : "large"}
+              edge="end"
+              aria-label="account of current user"
+              onClick={handleProfileMenuOpen}
+              color="inherit"
+            >
+              <Avatar sx={{ width: { xs: 32, md: 40 }, height: { xs: 32, md: 40 } }}>
+                <AccountCircle />
+              </Avatar>
+            </IconButton>
+          </Box>
+        </Toolbar>
+
+        {/* Mobile Search Bar */}
+        {showSearch && isMobile && mobileSearchOpen && (
+          <Box sx={{ px: 2, pb: 2 }}>
             <TextField
               fullWidth
               variant="outlined"
-              placeholder="Search by Model, Category, Brand, HP, Watt, Outlet, Phase..."
+              placeholder="Search products..."
               value={searchTerm}
               onChange={handleSearch}
-              onKeyPress={handleSearchSubmit}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleSearchIconClick();
+                }
+              }}
               size="small"
               InputProps={{
                 startAdornment: (
@@ -131,28 +227,48 @@ const Header = ({ onSearch, showSearch = true }) => {
             />
           </Box>
         )}
+      </AppBar>
 
-        <Box sx={{ flexGrow: 1 }} />
+      {/* Mobile Navigation Drawer */}
+      <Drawer
+        anchor="left"
+        open={mobileMenuOpen}
+        onClose={() => setMobileMenuOpen(false)}
+      >
+        <Box sx={{ width: 250, pt: 2 }}>
+          <List>
+            <ListItem component="button" onClick={handleHomeClick} sx={{ cursor: 'pointer' }}>
+              <ListItemIcon>
+                <HomeIcon />
+              </ListItemIcon>
+              <ListItemText primary="Home" />
+            </ListItem>
+            
+            <ListItem component="button" onClick={handleProfile} sx={{ cursor: 'pointer' }}>
+              <ListItemIcon>
+                <Person />
+              </ListItemIcon>
+              <ListItemText primary="Profile" />
+            </ListItem>
 
-        {/* User Profile */}
-        <Box sx={{ display: 'flex', alignItems: 'center' }}>
-          <Typography variant="body2" sx={{ mr: 1, display: { xs: 'none', sm: 'block' } }}>
-            {user?.username}
-          </Typography>
-          <IconButton
-            size="large"
-            edge="end"
-            aria-label="account of current user"
-            aria-controls="primary-search-account-menu"
-            aria-haspopup="true"
-            onClick={handleProfileMenuOpen}
-            color="inherit"
-          >
-            <Avatar>
-              <AccountCircle />
-            </Avatar>
-          </IconButton>
+            {user?.role === 'admin' && (
+              <ListItem component="button" onClick={handleAdmin} sx={{ cursor: 'pointer' }}>
+                <ListItemIcon>
+                  <AdminPanelSettings />
+                </ListItemIcon>
+                <ListItemText primary="Admin Panel" />
+              </ListItem>
+            )}
+
+            <ListItem component="button" onClick={handleLogout} sx={{ cursor: 'pointer' }}>
+              <ListItemIcon>
+                <Logout />
+              </ListItemIcon>
+              <ListItemText primary="Logout" />
+            </ListItem>
+          </List>
         </Box>
+      </Drawer>
 
         {/* Profile Menu */}
         <Menu
@@ -185,9 +301,13 @@ const Header = ({ onSearch, showSearch = true }) => {
             Logout
           </MenuItem>
         </Menu>
-      </Toolbar>
-    </AppBar>
+    </>
   );
+};
+
+Header.propTypes = {
+  onSearch: PropTypes.func,
+  showSearch: PropTypes.bool
 };
 
 export default Header;

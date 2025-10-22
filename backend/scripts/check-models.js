@@ -7,8 +7,6 @@ const checkExistingModels = async () => {
     await mongoose.connect(process.env.MONGODB_URI);
     
     const Product = require('../models/Product');
-    const Category = require('../models/Category');
-    const Brand = require('../models/Brand');
     
     console.log('=== EXISTING MODEL NUMBERS ===\n');
     

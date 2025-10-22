@@ -34,6 +34,11 @@ const productSchema = new mongoose.Schema({
     required: [true, 'Max head is required'],
     min: [0, 'Max head must be a positive number']
   },
+  maxFlow: {
+    type: Number,
+    required: [true, 'Max flow is required'],
+    min: [0, 'Max flow must be a positive number']
+  },
   watt: {
     type: Number,
     required: [true, 'Watt is required'],

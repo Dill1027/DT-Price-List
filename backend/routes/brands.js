@@ -58,9 +58,10 @@ router.post('/', [
 
     const { name, description } = req.body;
 
-    // Check if brand already exists
+    // Check if active brand already exists (ignore soft-deleted brands)
     const existingBrand = await Brand.findOne({ 
-      name: { $regex: new RegExp(`^${name}$`, 'i') } 
+      name: { $regex: new RegExp(`^${name}$`, 'i') },
+      isActive: true
     });
     
     if (existingBrand) {
@@ -131,11 +132,12 @@ router.put('/:id', [
 
     const { name, description } = req.body;
 
-    // Check if new name is taken by another brand
+    // Check if new name is taken by another active brand (ignore soft-deleted brands)
     if (name && name !== brand.name) {
       const existingBrand = await Brand.findOne({ 
         name: { $regex: new RegExp(`^${name}$`, 'i') },
-        _id: { $ne: brand._id }
+        _id: { $ne: brand._id },
+        isActive: true
       });
       
       if (existingBrand) {
