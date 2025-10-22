@@ -639,21 +639,74 @@ router.post('/bulk-upload',
             productData.price = 0;
           }
 
-          const product = new Product(productData);
-          await product.save();
-
-          console.log(`✅ Row ${rowNum} success: Product ${productData.modelNumber} created`);
-          results.success.push({
-            row: rowNum,
-            modelNumber: productData.modelNumber
+          // Check if product with same model number already exists
+          const existingProduct = await Product.findOne({ 
+            modelNumber: String(modelNumber).trim(),
+            isActive: true 
           });
+
+          if (existingProduct) {
+            // If product exists, update only the price (for admin) or other allowed fields
+            if (req.user.role === 'admin' && price && Number(price) !== existingProduct.price) {
+              // Update price for existing product
+              existingProduct.price = Number(price);
+              existingProduct.updatedBy = req.user._id;
+              await existingProduct.save();
+
+              console.log(`✅ Row ${rowNum} success: Price updated for existing product ${productData.modelNumber} from ${existingProduct.price} to ${Number(price)}`);
+              results.success.push({
+                row: rowNum,
+                modelNumber: productData.modelNumber,
+                action: 'price_updated',
+                oldPrice: existingProduct.price,
+                newPrice: Number(price)
+              });
+            } else if (req.user.role !== 'admin') {
+              // Project users can update other fields but not price
+              existingProduct.hp = Number(hp);
+              existingProduct.outlet = String(outlet).trim();
+              existingProduct.maxHead = Number(maxHead);
+              existingProduct.maxFlow = Number(maxFlow);
+              existingProduct.watt = Number(watt);
+              existingProduct.phase = phase;
+              existingProduct.updatedBy = req.user._id;
+              await existingProduct.save();
+
+              console.log(`✅ Row ${rowNum} success: Product details updated for existing product ${productData.modelNumber}`);
+              results.success.push({
+                row: rowNum,
+                modelNumber: productData.modelNumber,
+                action: 'details_updated'
+              });
+            } else {
+              // Same price, no update needed
+              console.log(`ℹ️ Row ${rowNum} skipped: Product ${productData.modelNumber} already exists with same price`);
+              results.success.push({
+                row: rowNum,
+                modelNumber: productData.modelNumber,
+                action: 'no_change_needed'
+              });
+            }
+          } else {
+            // Create new product if it doesn't exist
+            const product = new Product(productData);
+            await product.save();
+
+            console.log(`✅ Row ${rowNum} success: New product ${productData.modelNumber} created`);
+            results.success.push({
+              row: rowNum,
+              modelNumber: productData.modelNumber,
+              action: 'created'
+            });
+          }
 
         } catch (error) {
           let errorMessage = error.message;
           
-          // Handle duplicate model number error
-          if (error.code === 11000 && error.keyPattern && error.keyPattern.modelNumber && productData) {
-            errorMessage = `Duplicate model number: ${productData.modelNumber}`;
+          // Handle other validation errors (not duplicate model number since we handle that above)
+          if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(err => err.message);
+            errorMessage = messages.join(', ');
           }
           
           console.log(`❌ Row ${rowNum} error:`, errorMessage);
@@ -668,13 +721,41 @@ router.post('/bulk-upload',
         total: results.total,
         success: results.success.length,
         errors: results.errors.length,
+        actions: {
+          created: results.success.filter(s => s.action === 'created').length,
+          priceUpdated: results.success.filter(s => s.action === 'price_updated').length,
+          detailsUpdated: results.success.filter(s => s.action === 'details_updated').length,
+          noChangeNeeded: results.success.filter(s => s.action === 'no_change_needed').length
+        },
         errorDetails: results.errors
       });
 
+      // Create detailed success message
+      const actionCounts = {
+        created: results.success.filter(s => s.action === 'created').length,
+        priceUpdated: results.success.filter(s => s.action === 'price_updated').length,
+        detailsUpdated: results.success.filter(s => s.action === 'details_updated').length,
+        noChangeNeeded: results.success.filter(s => s.action === 'no_change_needed').length
+      };
+
+      let successMessage = `Bulk upload completed. `;
+      const messageParts = [];
+      
+      if (actionCounts.created > 0) messageParts.push(`${actionCounts.created} new products created`);
+      if (actionCounts.priceUpdated > 0) messageParts.push(`${actionCounts.priceUpdated} prices updated`);
+      if (actionCounts.detailsUpdated > 0) messageParts.push(`${actionCounts.detailsUpdated} product details updated`);
+      if (actionCounts.noChangeNeeded > 0) messageParts.push(`${actionCounts.noChangeNeeded} products unchanged`);
+      
+      successMessage += messageParts.join(', ');
+      if (results.errors.length > 0) successMessage += `, ${results.errors.length} errors`;
+
       res.json({
         success: true,
-        message: `Bulk upload completed. ${results.success.length} products added, ${results.errors.length} errors`,
-        data: results
+        message: successMessage,
+        data: {
+          ...results,
+          summary: actionCounts
+        }
       });
 
     } catch (error) {
@@ -700,6 +781,75 @@ router.get('/download-template', auth, async (req, res) => {
 
     // Create a new workbook and worksheet
     const workbook = new ExcelJS.Workbook();
+    
+    // Create Instructions sheet first
+    const instructionsSheet = workbook.addWorksheet('Instructions');
+    
+    // Add instructions content
+    instructionsSheet.columns = [
+      { header: 'Instructions for Bulk Product Upload', key: 'instruction', width: 80 }
+    ];
+
+    const instructions = [
+      '',
+      '📋 BULK UPLOAD FEATURES:',
+      '',
+      '✅ NEW PRODUCTS: If a model number doesn\'t exist, a new product will be created.',
+      '',
+      '✅ PRICE UPDATES: If a model number already exists but with a different price,',
+      '   only the price will be updated (Admin users only).',
+      '',
+      '✅ DETAIL UPDATES: Project users can update product details (except price)',
+      '   for existing products.',
+      '',
+      '⚠️  IMPORTANT NOTES:',
+      '',
+      '• Model numbers must be unique within the system',
+      '• Phase must be exactly "1 Phase" or "3 Phase"',
+      '• All numeric fields (HP, Max Head, Max Flow, Watt, Price) must be positive numbers',
+      '• Category and Brand must exist in the system (use dropdowns in Products sheet)',
+      '• Admin users can set/update prices, Project users cannot',
+      '',
+      '📊 UPLOAD RESULTS:',
+      '',
+      '• You will see a summary showing:',
+      '  - How many new products were created',
+      '  - How many prices were updated',
+      '  - How many product details were updated',
+      '  - Any errors that occurred during upload',
+      '',
+      '🔄 PROCESS:',
+      '',
+      '1. Fill in the Products sheet with your data',
+      '2. Use the dropdown menus for Category, Brand, and Phase',
+      '3. Save the file and upload it through the application',
+      '4. Review the upload results for any errors',
+      '',
+      '💡 TIP: Start with the sample data in the Products sheet as a reference.'
+    ];
+
+    instructions.forEach((instruction, index) => {
+      const row = instructionsSheet.addRow({ instruction });
+      if (instruction.includes('📋') || instruction.includes('⚠️') || instruction.includes('📊') || instruction.includes('🔄')) {
+        row.font = { bold: true, size: 12 };
+        row.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFF0F8FF' }
+        };
+      }
+    });
+
+    // Style the instructions sheet
+    instructionsSheet.getCell('A1').font = { bold: true, size: 14 };
+    instructionsSheet.getCell('A1').fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4472C4' }
+    };
+    instructionsSheet.getCell('A1').font.color = { argb: 'FFFFFFFF' };
+
+    // Now create the main Products worksheet
     const worksheet = workbook.addWorksheet('Products');
 
     // Define the columns (matching bulk upload expected headers)

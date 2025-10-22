@@ -252,13 +252,35 @@ const CategoryDetails = () => {
 
     setUploading(true);
     try {
-      await axios.post('/api/products/bulk-upload', formData, {
+      const response = await axios.post('/api/products/bulk-upload', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
       });
 
-      toast.success('Products uploaded successfully');
+      // Show detailed success message based on actions taken
+      const data = response.data.data;
+      const summary = data.summary;
+      
+      let successMsg = 'Upload completed! ';
+      const details = [];
+      
+      if (summary?.created > 0) details.push(`${summary.created} new products`);
+      if (summary?.priceUpdated > 0) details.push(`${summary.priceUpdated} prices updated`);
+      if (summary?.detailsUpdated > 0) details.push(`${summary.detailsUpdated} details updated`);
+      if (summary?.noChangeNeeded > 0) details.push(`${summary.noChangeNeeded} unchanged`);
+      
+      if (details.length > 0) {
+        successMsg += details.join(', ');
+      }
+      
+      if (data.errors && data.errors.length > 0) {
+        successMsg += `. ${data.errors.length} errors occurred.`;
+        // You could also show detailed error information if needed
+        console.log('Upload errors:', data.errors);
+      }
+
+      toast.success(successMsg);
       fetchCategoryData();
       event.target.value = '';
     } catch (error) {
