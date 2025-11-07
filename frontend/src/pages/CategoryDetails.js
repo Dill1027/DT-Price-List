@@ -78,6 +78,9 @@ const CategoryDetails = () => {
   const [deleteDialog, setDeleteDialog] = useState(false);
   const [currentProduct, setCurrentProduct] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [selectedProducts, setSelectedProducts] = useState([]);
+  const [bulkDeleteDialog, setBulkDeleteDialog] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   
   // Column visibility state - show all details by default
   const [columnVisibilityMenuAnchor, setColumnVisibilityMenuAnchor] = useState(null);
@@ -478,7 +481,49 @@ const CategoryDetails = () => {
     }
   };
 
-  const handleColumnVisibilityMenuOpen = (event) => {
+  // Bulk delete functions
+  const handleBulkDelete = () => {
+    console.log('handleBulkDelete called, selectedProducts:', selectedProducts);
+    if (selectedProducts.length === 0) {
+      toast.error('Please select products to delete');
+      return;
+    }
+    setBulkDeleteDialog(true);
+  };
+
+  const handleConfirmBulkDelete = async () => {
+    if (selectedProducts.length === 0) return;
+
+    setBulkDeleting(true);
+    try {
+      const response = await axios.post('/api/products/bulk-delete', {
+        productIds: selectedProducts
+      });
+      
+      if (response.data.success) {
+        const { data } = response.data;
+        toast.success(`Successfully deleted ${data.deleted} product(s)!`);
+        setBulkDeleteDialog(false);
+        setSelectedProducts([]);
+        fetchCategoryData();
+      }
+    } catch (error) {
+      console.error('Bulk delete error:', error);
+      toast.error(error.response?.data?.message || 'Failed to delete products');
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const handleCancelBulkDelete = () => {
+    setBulkDeleteDialog(false);
+  };
+
+  const handleSelectionModelChange = (newSelectionModel) => {
+    console.log('Row selection model changed:', newSelectionModel);
+    setSelectedProducts(newSelectionModel);
+    console.log('Current row selection model:', newSelectionModel);
+  };  const handleColumnVisibilityMenuOpen = (event) => {
     setColumnVisibilityMenuAnchor(event.currentTarget);
   };
 
@@ -586,6 +631,19 @@ const CategoryDetails = () => {
           >
             {isMobile ? '' : 'Add Product'}
           </Button>
+
+          {user?.role === 'admin' && (
+            <Button
+              startIcon={<DeleteIcon />}
+              onClick={handleBulkDelete}
+              size={isMobile ? "small" : "medium"}
+              variant="outlined"
+              color="error"
+              disabled={selectedProducts.length === 0}
+            >
+              {isMobile ? '' : `Delete (${selectedProducts.length})`}
+            </Button>
+          )}
         </>
       )}
     </Box>
@@ -925,6 +983,44 @@ const CategoryDetails = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <Dialog 
+        open={bulkDeleteDialog} 
+        onClose={handleCancelBulkDelete}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Confirm Bulk Delete</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Are you sure you want to delete {selectedProducts.length} selected product(s)? 
+            This action cannot be undone and will permanently remove these products from the database.
+          </DialogContentText>
+          {selectedProducts.length > 0 && (
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="subtitle2" gutterBottom>
+                Selected products will be deleted:
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {selectedProducts.length} product(s) selected
+              </Typography>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelBulkDelete}>Cancel</Button>
+          <Button 
+            onClick={handleConfirmBulkDelete} 
+            color="error" 
+            variant="contained"
+            disabled={bulkDeleting}
+            startIcon={bulkDeleting ? <CircularProgress size={20} /> : null}
+          >
+            {bulkDeleting ? 'Deleting...' : `Delete ${selectedProducts.length} Product(s)`}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 
@@ -1014,11 +1110,13 @@ const CategoryDetails = () => {
           <DataGrid
             rows={filteredProducts}
             columns={columns}
-            pageSize={isMobile ? 10 : 25}
-            rowsPerPageOptions={isMobile ? [10, 25] : [25, 50, 100]}
+            pageSize={isMobile ? 25 : 100}
+            rowsPerPageOptions={isMobile ? [10, 25, 50] : [25, 50, 100]}
             checkboxSelection={user?.role === 'admin' && !isMobile}
             disableSelectionOnClick
             getRowId={(row) => row._id}
+            rowSelectionModel={selectedProducts}
+            onRowSelectionModelChange={handleSelectionModelChange}
             density={isMobile ? "compact" : "standard"}
             scrollbarSize={isMobile ? 8 : 17}
             columnVisibilityModel={{

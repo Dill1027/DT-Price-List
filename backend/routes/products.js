@@ -25,7 +25,7 @@ router.get('/', auth, async (req, res) => {
       minPrice,
       maxPrice,
       page = 1,
-      limit = 20,
+      limit = 100,
       sortBy = 'createdAt',
       sortOrder = 'desc'
     } = req.query;
@@ -160,22 +160,31 @@ router.get('/', auth, async (req, res) => {
 });
 
 // @route   GET /api/products/check-model/:modelNumber/:phase
-// @desc    Check if model number + phase combination exists
+// @desc    Check if model number + phase combination exists in a category
 // @access  Private
 router.get('/check-model/:modelNumber/:phase', auth, async (req, res) => {
   try {
     const { modelNumber, phase } = req.params;
-    const exists = await Product.findOne({ 
+    const { category } = req.query; // Optional category filter
+    
+    const query = { 
       modelNumber: modelNumber.trim(),
       phase: phase,
       isActive: true 
-    });
+    };
+    
+    if (category) {
+      query.category = category;
+    }
+    
+    const exists = await Product.findOne(query);
     
     res.json({
       success: true,
       exists: !!exists,
       modelNumber: modelNumber.trim(),
-      phase: phase
+      phase: phase,
+      category: category || 'all'
     });
   } catch (error) {
     console.error('Check model number + phase error:', error);
@@ -187,15 +196,23 @@ router.get('/check-model/:modelNumber/:phase', auth, async (req, res) => {
 });
 
 // @route   GET /api/products/check-model/:modelNumber
-// @desc    Check if model number exists (backwards compatibility)
+// @desc    Check if model number exists (shows all instances across categories)
 // @access  Private
 router.get('/check-model/:modelNumber', auth, async (req, res) => {
   try {
     const { modelNumber } = req.params;
-    const products = await Product.find({ 
+    const { category } = req.query; // Optional category filter
+    
+    const query = { 
       modelNumber: modelNumber.trim(),
       isActive: true 
-    });
+    };
+    
+    if (category) {
+      query.category = category;
+    }
+    
+    const products = await Product.find(query);
     
     res.json({
       success: true,
@@ -250,13 +267,14 @@ router.post('/', [
   body('category').notEmpty().withMessage('Category is required'),
   body('brand').notEmpty().withMessage('Brand is required'),
   body('modelNumber').trim().notEmpty().withMessage('Model number is required'),
-  body('hp').isNumeric().withMessage('HP must be a number'),
-  body('outlet').trim().notEmpty().withMessage('Outlet is required'),
-  body('maxHead').isNumeric().withMessage('Max head must be a number'),
-  body('maxFlow').isNumeric().withMessage('Max flow must be a number'),
-  body('watt').isNumeric().withMessage('Watt must be a number'),
-  body('phase').isIn(['1 Phase', '3 Phase']).withMessage('Phase must be 1 Phase or 3 Phase'),
-  body('price').if((value, { req }) => req.user.role === 'admin').isNumeric().withMessage('Price must be a number')
+  body('price').if((value, { req }) => req.user.role === 'admin').isNumeric().withMessage('Price must be a number'),
+  // Optional fields
+  body('hp').optional().isNumeric().withMessage('HP must be a number'),
+  body('outlet').optional().trim(),
+  body('maxHead').optional().isNumeric().withMessage('Max head must be a number'),
+  body('maxFlow').optional().isNumeric().withMessage('Max flow must be a number'),
+  body('watt').optional().isNumeric().withMessage('Watt must be a number'),
+  body('phase').optional().isIn(['1 Phase', '3 Phase']).withMessage('Phase must be 1 Phase or 3 Phase')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -285,14 +303,16 @@ router.post('/', [
       category,
       brand,
       modelNumber,
-      hp: Number(hp),
-      outlet,
-      maxHead: Number(maxHead),
-      maxFlow: Number(maxFlow),
-      watt: Number(watt),
-      phase,
       createdBy: req.user._id
     };
+
+    // Add optional fields only if provided
+    if (hp !== undefined && hp !== '') productData.hp = Number(hp);
+    if (outlet !== undefined && outlet !== '') productData.outlet = outlet;
+    if (maxHead !== undefined && maxHead !== '') productData.maxHead = Number(maxHead);
+    if (maxFlow !== undefined && maxFlow !== '') productData.maxFlow = Number(maxFlow);
+    if (watt !== undefined && watt !== '') productData.watt = Number(watt);
+    if (phase !== undefined && phase !== '') productData.phase = phase;
 
     // Only admin can set price
     if (req.user.role === 'admin') {
@@ -478,6 +498,86 @@ router.delete('/:id', auth, authorize(['admin']), async (req, res) => {
   }
 });
 
+// @route   POST /api/products/bulk-delete
+// @desc    Bulk delete products (Admin only) - Hard delete from database
+// @access  Private (Admin)
+router.post('/bulk-delete', auth, authorize(['admin']), async (req, res) => {
+  try {
+    const { productIds } = req.body;
+
+    // Validation
+    if (!productIds || !Array.isArray(productIds) || productIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Product IDs array is required and cannot be empty'
+      });
+    }
+
+    // Validate that all IDs are valid MongoDB ObjectIDs
+    const mongoose = require('mongoose');
+    const invalidIds = productIds.filter(id => !mongoose.Types.ObjectId.isValid(id));
+    
+    if (invalidIds.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid product IDs: ${invalidIds.join(', ')}`
+      });
+    }
+
+    console.log(`🗑️ Bulk delete request for ${productIds.length} products by user: ${req.user.username}`);
+
+    // Find products to be deleted (for logging and validation)
+    const productsToDelete = await Product.find({
+      _id: { $in: productIds },
+      isActive: true
+    }).populate('category', 'name').populate('brand', 'name');
+
+    if (productsToDelete.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No active products found with the provided IDs'
+      });
+    }
+
+    console.log('📋 Products to be deleted:');
+    productsToDelete.forEach(product => {
+      console.log(`  - ${product.modelNumber} (${product.category.name} - ${product.brand.name})`);
+    });
+
+    // Perform bulk delete
+    const deleteResult = await Product.deleteMany({
+      _id: { $in: productIds },
+      isActive: true
+    });
+
+    console.log(`✅ Bulk delete completed: ${deleteResult.deletedCount} products deleted`);
+
+    // Return detailed response
+    res.json({
+      success: true,
+      message: `Successfully deleted ${deleteResult.deletedCount} product(s) from database`,
+      data: {
+        requested: productIds.length,
+        found: productsToDelete.length,
+        deleted: deleteResult.deletedCount,
+        deletedProducts: productsToDelete.map(product => ({
+          id: product._id,
+          modelNumber: product.modelNumber,
+          category: product.category.name,
+          brand: product.brand.name
+        }))
+      }
+    });
+
+  } catch (error) {
+    console.error('Bulk delete error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during bulk delete operation'
+    });
+  }
+});
+
 // @route   POST /api/products/bulk-upload
 // @desc    Bulk upload products via Excel
 // @access  Private (Admin, Project User)
@@ -519,29 +619,23 @@ router.post('/bulk-upload',
       }
 
       console.log('✅ Validating headers...');
-      // Validate header format - more flexible matching
-      const expectedHeaders = ['category', 'brand', 'model number', 'hp', 'outlet', 'max head', 'max flow', 'watt', 'phase', 'price'];
+      // Validate header format - only require essential fields
+      const requiredHeaders = ['category', 'brand', 'model number', 'price'];
       const actualHeaders = Object.keys(data[0]).map(h => h.toLowerCase().trim());
       
-      console.log('Expected headers:', expectedHeaders);
+      console.log('Required headers:', requiredHeaders);
       console.log('Actual headers:', actualHeaders);
       
-      const missingHeaders = expectedHeaders.filter(expectedHeader => {
+      const missingHeaders = requiredHeaders.filter(requiredHeader => {
         return !actualHeaders.some(actualHeader => {
           // More flexible matching for variations
-          if (expectedHeader === 'model number') {
+          if (requiredHeader === 'model number') {
             return actualHeader.includes('model') && actualHeader.includes('number');
           }
-          if (expectedHeader === 'max head') {
-            return actualHeader.includes('max') && actualHeader.includes('head');
-          }
-          if (expectedHeader === 'max flow') {
-            return actualHeader.includes('max') && actualHeader.includes('flow');
-          }
-          if (expectedHeader === 'price') {
+          if (requiredHeader === 'price') {
             return actualHeader.includes('price');
           }
-          return actualHeader.includes(expectedHeader);
+          return actualHeader.includes(requiredHeader);
         });
       });
 
@@ -604,9 +698,9 @@ router.post('/bulk-upload',
             categoryName, brandName, modelNumber, hp, outlet, maxHead, maxFlow, watt, phase, price
           });
 
-          // Validate required fields
-          if (!categoryName || !brandName || !modelNumber || !hp || !outlet || !maxHead || !maxFlow || !watt || !phase) {
-            const errorMsg = 'Missing required fields';
+          // Validate required fields (only essential ones)
+          if (!categoryName || !brandName || !modelNumber) {
+            const errorMsg = 'Missing required fields (category, brand, model number)';
             console.log(`❌ Row ${rowNum} error:`, errorMsg);
             results.errors.push({
               row: rowNum,
@@ -639,8 +733,8 @@ router.post('/bulk-upload',
             continue;
           }
 
-          // Validate phase
-          if (!['1 Phase', '3 Phase'].includes(phase)) {
+          // Validate phase if provided
+          if (phase && !['1 Phase', '3 Phase'].includes(phase)) {
             const errorMsg = 'Phase must be "1 Phase" or "3 Phase"';
             console.log(`❌ Row ${rowNum} error:`, errorMsg);
             results.errors.push({
@@ -654,14 +748,16 @@ router.post('/bulk-upload',
             category: categoryId,
             brand: brandId,
             modelNumber: String(modelNumber).trim(),
-            hp: Number(hp),
-            outlet: String(outlet).trim(),
-            maxHead: Number(maxHead),
-            maxFlow: Number(maxFlow),
-            watt: Number(watt),
-            phase,
             createdBy: req.user._id
           };
+
+          // Add optional fields only if provided
+          if (hp) productData.hp = Number(hp);
+          if (outlet) productData.outlet = String(outlet).trim();
+          if (maxHead) productData.maxHead = Number(maxHead);
+          if (maxFlow) productData.maxFlow = Number(maxFlow);
+          if (watt) productData.watt = Number(watt);
+          if (phase) productData.phase = phase;
 
           // Handle price based on user role
           if (req.user.role === 'admin') {
@@ -671,67 +767,76 @@ router.post('/bulk-upload',
             productData.price = 0;
           }
 
-          // Check if product with same model number AND phase already exists
+          // Check if product with same model number, category, brand, and phase already exists
           const existingProduct = await Product.findOne({ 
             modelNumber: String(modelNumber).trim(),
-            phase: phase,
+            category: categoryId,
+            brand: brandId,
+            phase: phase || '',
             isActive: true 
           });
 
           if (existingProduct) {
-            // If product exists with same model number and phase, update price or other fields
+            // If product exists with same model number, update price or other fields
             if (req.user.role === 'admin' && price && Number(price) !== existingProduct.price) {
               // Update price for existing product
               existingProduct.price = Number(price);
+              
+              // Update other fields if provided
+              if (hp) existingProduct.hp = Number(hp);
+              if (outlet) existingProduct.outlet = String(outlet).trim();
+              if (maxHead) existingProduct.maxHead = Number(maxHead);
+              if (maxFlow) existingProduct.maxFlow = Number(maxFlow);
+              if (watt) existingProduct.watt = Number(watt);
+              if (phase) existingProduct.phase = phase;
+              
               existingProduct.updatedBy = req.user._id;
               await existingProduct.save();
 
-              console.log(`✅ Row ${rowNum} success: Price updated for existing product ${productData.modelNumber} (${phase}) from ${existingProduct.price} to ${Number(price)}`);
+              console.log(`✅ Row ${rowNum} success: Price updated for existing product ${productData.modelNumber} from ${existingProduct.price} to ${Number(price)}`);
               results.success.push({
                 row: rowNum,
                 modelNumber: productData.modelNumber,
-                phase: phase,
                 action: 'price_updated',
                 oldPrice: existingProduct.price,
                 newPrice: Number(price)
               });
             } else if (req.user.role !== 'admin') {
               // Project users can update other fields but not price
-              existingProduct.hp = Number(hp);
-              existingProduct.outlet = String(outlet).trim();
-              existingProduct.maxHead = Number(maxHead);
-              existingProduct.maxFlow = Number(maxFlow);
-              existingProduct.watt = Number(watt);
+              if (hp) existingProduct.hp = Number(hp);
+              if (outlet) existingProduct.outlet = String(outlet).trim();
+              if (maxHead) existingProduct.maxHead = Number(maxHead);
+              if (maxFlow) existingProduct.maxFlow = Number(maxFlow);
+              if (watt) existingProduct.watt = Number(watt);
+              if (phase) existingProduct.phase = phase;
+              
               existingProduct.updatedBy = req.user._id;
               await existingProduct.save();
 
-              console.log(`✅ Row ${rowNum} success: Product details updated for existing product ${productData.modelNumber} (${phase})`);
+              console.log(`✅ Row ${rowNum} success: Product details updated for existing product ${productData.modelNumber}`);
               results.success.push({
                 row: rowNum,
                 modelNumber: productData.modelNumber,
-                phase: phase,
                 action: 'details_updated'
               });
             } else {
               // Same price, no update needed
-              console.log(`ℹ️ Row ${rowNum} skipped: Product ${productData.modelNumber} (${phase}) already exists with same price`);
+              console.log(`ℹ️ Row ${rowNum} skipped: Product ${productData.modelNumber} already exists with same price`);
               results.success.push({
                 row: rowNum,
                 modelNumber: productData.modelNumber,
-                phase: phase,
                 action: 'no_change_needed'
               });
             }
           } else {
-            // Create new product if it doesn't exist with this model number and phase combination
+            // Create new product if it doesn't exist
             const product = new Product(productData);
             await product.save();
 
-            console.log(`✅ Row ${rowNum} success: New product ${productData.modelNumber} (${phase}) created`);
+            console.log(`✅ Row ${rowNum} success: New product ${productData.modelNumber} created`);
             results.success.push({
               row: rowNum,
               modelNumber: productData.modelNumber,
-              phase: phase,
               action: 'created'
             });
           }
@@ -828,26 +933,28 @@ router.get('/download-template', auth, async (req, res) => {
 
     const instructions = [
       '',
-      '📋 BULK UPLOAD FEATURES:',
+      '📋 SIMPLIFIED BULK UPLOAD:',
       '',
-      '✅ NEW PRODUCTS: If a model number + phase combination doesn\'t exist, a new product will be created.',
+      '✅ REQUIRED FIELDS ONLY: Only Category, Brand, Model Number, and Price are required.',
+      '   All other fields (HP, Outlet, Max Head, Max Flow, Watt, Phase) are optional.',
       '',
-      '✅ PRICE UPDATES: If a model number + phase combination already exists but with a different price,',
+      '✅ PRICE UPDATES: If a model number already exists but with a different price,',
       '   only the price will be updated (Admin users only).',
       '',
       '✅ DETAIL UPDATES: Project users can update product details (except price)',
       '   for existing products.',
       '',
-      '✅ PHASE VARIATIONS: Same model number can exist with different phases.',
-      '   Example: "SUB-001" can have both "1 Phase" and "3 Phase" versions.',
+      '✅ FLEXIBLE UPLOAD: You can upload just the essential information or include',
+      '   detailed specifications as needed.',
       '',
       '⚠️  IMPORTANT NOTES:',
       '',
-      '• Model number + Phase combination must be unique within the system',
-      '• Same model number with different phases (1 Phase/3 Phase) is allowed',
-      '• Phase must be exactly "1 Phase" or "3 Phase"',
-      '• All numeric fields (HP, Max Head, Max Flow, Watt, Price) must be positive numbers',
-      '• Category and Brand must exist in the system (use dropdowns in Products sheet)',
+      '• REQUIRED: Category, Brand, Model Number, Price',
+      '• OPTIONAL: HP, Outlet, Max Head, Max Flow, Watt, Phase',
+      '• Model numbers must be unique within the system',
+      '• Phase (if provided) must be exactly "1 Phase" or "3 Phase"',
+      '• All numeric fields must be positive numbers',
+      '• Category and Brand must exist in the system (use dropdowns)',
       '• Admin users can set/update prices, Project users cannot',
       '',
       '📊 UPLOAD RESULTS:',
@@ -860,14 +967,14 @@ router.get('/download-template', auth, async (req, res) => {
       '',
       '🔄 PROCESS:',
       '',
-      '1. Fill in the Products sheet with your data',
-      '2. Use the dropdown menus for Category, Brand, and Phase',
-      '3. Same model number with different phases is allowed',
+      '1. Fill in the required fields: Category, Brand, Model Number, Price',
+      '2. Add optional fields if you have detailed specifications',
+      '3. Use dropdown menus for Category and Brand',
       '4. Save the file and upload it through the application',
       '5. Review the upload results for any errors',
       '',
-      '💡 TIP: You can have the same model number for both 1 Phase and 3 Phase products.',
-      '💡 TIP: Start with the sample data in the Products sheet as a reference.'
+      '💡 TIP: You can start with just the basic information and add details later.',
+      '💡 TIP: See sample data showing both minimal and detailed product entries.'
     ];
 
     instructions.forEach((instruction, index) => {
@@ -894,58 +1001,50 @@ router.get('/download-template', auth, async (req, res) => {
     // Now create the main Products worksheet
     const worksheet = workbook.addWorksheet('Products');
 
-    // Define the columns (matching bulk upload expected headers)
+    // Define the columns - only required fields, others optional
     worksheet.columns = [
       { header: 'category', key: 'category', width: 15 },
       { header: 'brand', key: 'brand', width: 15 },
       { header: 'model number', key: 'modelNumber', width: 20 },
+      { header: 'price (rs.)', key: 'price', width: 15 },
+      // Optional fields
       { header: 'hp', key: 'hp', width: 10 },
       { header: 'outlet', key: 'outlet', width: 12 },
       { header: 'max head', key: 'maxHead', width: 15 },
       { header: 'max flow', key: 'maxFlow', width: 15 },
       { header: 'watt', key: 'watt', width: 10 },
-      { header: 'phase', key: 'phase', width: 12 },
-      { header: 'price (rs.)', key: 'price', width: 15 }
+      { header: 'phase', key: 'phase', width: 12 }
     ];
 
-    // Add sample data rows
+    // Add sample data rows - showing required fields only and with optional fields
     worksheet.addRow({
       category: categories.length > 0 ? categories[0].name : 'Submersible',
       brand: brands.length > 0 ? brands[0].name : 'Pentax',
       modelNumber: 'SUB-001',
-      hp: 1,
-      outlet: '1 inch',
-      maxHead: 50,
-      maxFlow: 120,
-      watt: 750,
-      phase: '1 Phase',
       price: 15000
+      // Optional fields can be left empty or filled
     });
 
     worksheet.addRow({
       category: categories.length > 0 ? categories[0].name : 'Submersible',
       brand: brands.length > 0 ? brands[0].name : 'Pentax',
-      modelNumber: 'SUB-001',
+      modelNumber: 'SUB-002',
+      price: 17000,
+      // Example with optional fields filled
       hp: 1,
       outlet: '1 inch',
       maxHead: 50,
       maxFlow: 120,
-      watt: 1100,
-      phase: '3 Phase',
-      price: 17000
+      watt: 750,
+      phase: '1 Phase'
     });
 
     worksheet.addRow({
       category: categories.length > 1 ? categories[1].name : 'Centrifugal',
       brand: brands.length > 1 ? brands[1].name : 'Deep Tec',
       modelNumber: 'CENT-001',
-      hp: 2,
-      outlet: '2 inch',
-      maxHead: 35,
-      maxFlow: 200,
-      watt: 1500,
-      phase: '3 Phase',
       price: 25000
+      // Only required fields - optional fields empty
     });
 
     // Add more empty rows for data entry (rows 4-100)
@@ -979,65 +1078,65 @@ router.get('/download-template', auth, async (req, res) => {
       });
     }
 
-    // Create phase dropdown validation (column H is now I)
-    worksheet.dataValidations.add('I2:I100', {
+    // Create phase dropdown validation (column J - optional)
+    worksheet.dataValidations.add('J2:J100', {
       type: 'list',
-      allowBlank: false,
+      allowBlank: true, // Make phase optional
       formulae: ['"1 Phase,3 Phase"'],
       showErrorMessage: true,
       errorTitle: 'Invalid Phase',
-      error: 'Please select either "1 Phase" or "3 Phase".'
+      error: 'Please select either "1 Phase" or "3 Phase" or leave blank.'
     });
 
-    // Add number validation for numeric fields
-    worksheet.dataValidations.add('D2:D100', { // hp
-      type: 'decimal',
-      operator: 'greaterThanOrEqual',
-      formulae: [0],
-      allowBlank: true,
-      showErrorMessage: true,
-      errorTitle: 'Invalid HP',
-      error: 'HP must be a positive number.'
-    });
-
-    worksheet.dataValidations.add('F2:F100', { // max head
-      type: 'decimal',
-      operator: 'greaterThanOrEqual',
-      formulae: [0],
-      allowBlank: true,
-      showErrorMessage: true,
-      errorTitle: 'Invalid Max Head',
-      error: 'Max Head must be a positive number.'
-    });
-
-    worksheet.dataValidations.add('G2:G100', { // max flow
-      type: 'decimal',
-      operator: 'greaterThanOrEqual',
-      formulae: [0],
-      allowBlank: true,
-      showErrorMessage: true,
-      errorTitle: 'Invalid Max Flow',
-      error: 'Max Flow must be a positive number.'
-    });
-
-    worksheet.dataValidations.add('H2:H100', { // watt
-      type: 'whole',
-      operator: 'greaterThanOrEqual',
-      formulae: [0],
-      allowBlank: true,
-      showErrorMessage: true,
-      errorTitle: 'Invalid Watt',
-      error: 'Watt must be a positive whole number.'
-    });
-
-    worksheet.dataValidations.add('J2:J100', { // price (rs.)
+    // Add number validation for numeric fields (all optional except price)
+    worksheet.dataValidations.add('D2:D100', { // price (required)
       type: 'decimal',
       operator: 'greaterThan',
       formulae: [0],
       allowBlank: false,
       showErrorMessage: true,
       errorTitle: 'Invalid Price',
-      error: 'Price must be a positive number greater than 0.'
+      error: 'Price is required and must be greater than 0.'
+    });
+
+    worksheet.dataValidations.add('E2:E100', { // hp (optional)
+      type: 'decimal',
+      operator: 'greaterThanOrEqual',
+      formulae: [0],
+      allowBlank: true,
+      showErrorMessage: true,
+      errorTitle: 'Invalid HP',
+      error: 'HP must be a positive number or leave blank.'
+    });
+
+    worksheet.dataValidations.add('G2:G100', { // max head (optional)
+      type: 'decimal',
+      operator: 'greaterThanOrEqual',
+      formulae: [0],
+      allowBlank: true,
+      showErrorMessage: true,
+      errorTitle: 'Invalid Max Head',
+      error: 'Max Head must be a positive number or leave blank.'
+    });
+
+    worksheet.dataValidations.add('H2:H100', { // max flow (optional)
+      type: 'decimal',
+      operator: 'greaterThanOrEqual',
+      formulae: [0],
+      allowBlank: true,
+      showErrorMessage: true,
+      errorTitle: 'Invalid Max Flow',
+      error: 'Max Flow must be a positive number or leave blank.'
+    });
+
+    worksheet.dataValidations.add('I2:I100', { // watt (optional)
+      type: 'whole',
+      operator: 'greaterThanOrEqual',
+      formulae: [0],
+      allowBlank: true,
+      showErrorMessage: true,
+      errorTitle: 'Invalid Watt',
+      error: 'Watt must be a positive whole number or leave blank.'
     });
 
     // Style the header row

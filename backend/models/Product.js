@@ -19,34 +19,34 @@ const productSchema = new mongoose.Schema({
   },
   hp: {
     type: Number,
-    required: [true, 'HP is required'],
-    min: [0, 'HP must be a positive number']
+    min: [0, 'HP must be a positive number'],
+    default: ''
   },
   outlet: {
     type: String,
-    required: [true, 'Outlet is required'],
     trim: true,
-    maxlength: [50, 'Outlet cannot exceed 50 characters']
+    maxlength: [50, 'Outlet cannot exceed 50 characters'],
+    default: ''
   },
   maxHead: {
     type: Number,
-    required: [true, 'Max head is required'],
-    min: [0, 'Max head must be a positive number']
+    min: [0, 'Max head must be a positive number'],
+    default: ''
   },
   maxFlow: {
     type: Number,
-    required: [true, 'Max flow is required'],
-    min: [0, 'Max flow must be a positive number']
+    min: [0, 'Max flow must be a positive number'],
+    default: ''
   },
   watt: {
     type: Number,
-    required: [true, 'Watt is required'],
-    min: [0, 'Watt must be a positive number']
+    min: [0, 'Watt must be a positive number'],
+    default: ''
   },
   phase: {
     type: String,
-    enum: ['1 Phase', '3 Phase'],
-    required: [true, 'Phase is required']
+    enum: ['1 Phase', '3 Phase', ''],
+    default: ''
   },
   price: {
     type: Number,
@@ -77,7 +77,18 @@ productSchema.index({
   'brand.name': 'text' 
 });
 
-// Compound unique index for model number and phase combination
-productSchema.index({ modelNumber: 1, phase: 1 }, { unique: true });
+// Compound unique index - allows same model number across different categories and phases
+productSchema.index({ 
+  modelNumber: 1, 
+  category: 1,
+  brand: 1, 
+  phase: 1 
+}, { 
+  unique: true, 
+  sparse: true // Allow documents with missing phase field
+});
+
+// Search performance index for model number
+productSchema.index({ modelNumber: 1 });
 
 module.exports = mongoose.model('Product', productSchema);
