@@ -69,6 +69,9 @@ const ExcelPreviewDialog = ({
   const [availableSheets, setAvailableSheets] = useState([]);
   const [selectedSheet, setSelectedSheet] = useState('');
   const [workbookData, setWorkbookData] = useState(null);
+  const [processAllSheets, setProcessAllSheets] = useState(false);
+  const [combinedData, setCombinedData] = useState([]);
+  const [sheetsData, setSheetsData] = useState({});
 
   // Column definitions for product data
   const expectedColumns = [
@@ -119,7 +122,7 @@ const ExcelPreviewDialog = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editValue, editingCell]);
 
-  const parseExcelFile = async (sheetName = null) => {
+  const parseExcelFile = async (sheetName = null, processAll = false) => {
     setLoading(true);
     try {
       const arrayBuffer = await file.arrayBuffer();
@@ -130,11 +133,18 @@ const ExcelPreviewDialog = ({
       
       // Get all available sheets
       const sheetNames = workbook.SheetNames;
-      setAvailableSheets(sheetNames.map((name, index) => ({
+      const sheetsInfo = sheetNames.map((name, index) => ({
         name,
         index,
         displayName: name || `Sheet ${index + 1}`
-      })));
+      }));
+      setAvailableSheets(sheetsInfo);
+      
+      if (processAll || processAllSheets) {
+        // Process all sheets and combine data
+        await processAllSheetsData(workbook, sheetsInfo);
+        return;
+      }
       
       // Use selected sheet or first sheet as default
       const targetSheetName = sheetName || selectedSheet || sheetNames[0];
@@ -386,6 +396,89 @@ const ExcelPreviewDialog = ({
     
     if (workbookData) {
       await parseExcelFile(newSheetName);
+    }
+  };
+
+  const processAllSheetsData = async (workbook, sheetsInfo) => {
+    const allSheetsData = {};
+    const combinedRows = [];
+    let totalRowsProcessed = 0;
+    
+    for (const sheetInfo of sheetsInfo) {
+      const worksheet = workbook.Sheets[sheetInfo.name];
+      
+      if (!worksheet) continue;
+      
+      // Convert to JSON with header row
+      const jsonData = XLSX.utils.sheet_to_json(worksheet, { 
+        header: 1,
+        defval: '' 
+      });
+
+      if (jsonData.length === 0) continue;
+
+      // Process data for this sheet
+      const headers = jsonData[0] || [];
+      const rows = jsonData.slice(1);
+
+      // Map headers to expected columns
+      const columnMapping = mapHeaders(headers);
+      
+      // Convert rows to objects with sheet source
+      const processedData = rows.map((row, index) => {
+        const rowData = { 
+          _originalRow: index + 2, // +2 because we skip header and arrays are 0-indexed
+          _sourceSheet: sheetInfo.name,
+          _sheetDisplayName: sheetInfo.displayName,
+          _globalRowIndex: totalRowsProcessed + index + 1,
+          _errors: []
+        };
+        
+        headers.forEach((header, colIndex) => {
+          const mappedKey = columnMapping[header] || header.toLowerCase().replace(/\s+/g, '');
+          rowData[mappedKey] = row[colIndex] || '';
+        });
+
+        return rowData;
+      }).filter(row => {
+        // Filter out completely empty rows
+        return Object.keys(row).some(key => 
+          !key.startsWith('_') && row[key] && row[key].toString().trim() !== ''
+        );
+      });
+
+      allSheetsData[sheetInfo.name] = {
+        sheetInfo,
+        data: processedData,
+        headers,
+        rowCount: processedData.length
+      };
+      
+      combinedRows.push(...processedData);
+      totalRowsProcessed += processedData.length;
+    }
+    
+    setSheetsData(allSheetsData);
+    setCombinedData(combinedRows);
+    setPreviewData(combinedRows);
+    setProcessAllSheets(true);
+    setSelectedSheet('ALL_SHEETS');
+  };
+
+  const toggleAllSheetsMode = async () => {
+    if (processAllSheets) {
+      // Switch back to single sheet mode
+      setProcessAllSheets(false);
+      setCombinedData([]);
+      setSheetsData({});
+      if (workbookData && availableSheets.length > 0) {
+        await parseExcelFile(availableSheets[0].name);
+      }
+    } else {
+      // Switch to all sheets mode
+      if (workbookData) {
+        await processAllSheetsData(workbookData, availableSheets);
+      }
     }
   };
 
@@ -743,9 +836,16 @@ const ExcelPreviewDialog = ({
               </Typography>
               <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 2 }}>
                 <Chip 
-                  label={`${previewData.length} rows`} 
-                  color="primary" 
+                  label={processAllSheets ? `${previewData.length} total rows from ${availableSheets.length} sheets` : `${previewData.length} rows`} 
+                  color={processAllSheets ? "secondary" : "primary"} 
                 />
+                {processAllSheets && (
+                  <Chip
+                    label={`${Object.keys(sheetsData).length} sheets processed`}
+                    color="info"
+                    variant="outlined"
+                  />
+                )}
                 {errorCount > 0 && (
                   <Chip 
                     label={`${errorCount} errors`} 
@@ -846,14 +946,25 @@ const ExcelPreviewDialog = ({
             {tabValue === 0 && (
               <Box>
                 {selectedSheet && availableSheets.length > 1 && (
-                  <Box sx={{ p: 2, bgcolor: 'info.50', display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography variant="body2" color="info.main">
-                      📄 Viewing Sheet: <strong>{selectedSheet}</strong>
-                    </Typography>
-                    {availableSheets.length > 1 && (
-                      <Typography variant="caption" color="text.secondary">
-                        ({availableSheets.length} sheets available)
-                      </Typography>
+                  <Box sx={{ p: 2, bgcolor: processAllSheets ? 'secondary.50' : 'info.50', display: 'flex', alignItems: 'center', gap: 1 }}>
+                    {processAllSheets ? (
+                      <Box>
+                        <Typography variant="body2" color="secondary.main">
+                          🔗 <strong>Combined View:</strong> All {availableSheets.length} sheets
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Data sources: {availableSheets.map(s => s.displayName).join(', ')}
+                        </Typography>
+                      </Box>
+                    ) : (
+                      <Box>
+                        <Typography variant="body2" color="info.main">
+                          📄 Viewing Sheet: <strong>{selectedSheet}</strong>
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          ({availableSheets.length} sheets available)
+                        </Typography>
+                      </Box>
                     )}
                   </Box>
                 )}
@@ -862,6 +973,11 @@ const ExcelPreviewDialog = ({
                   <TableHead>
                     <TableRow>
                       <TableCell sx={{ fontWeight: 'bold' }}>Row</TableCell>
+                      {processAllSheets && (
+                        <TableCell sx={{ fontWeight: 'bold', bgcolor: 'secondary.50' }}>
+                          📄 Source Sheet
+                        </TableCell>
+                      )}
                       {expectedColumns.map((column) => (
                         <TableCell key={column.key} sx={{ fontWeight: 'bold' }}>
                           {column.label}
@@ -876,8 +992,18 @@ const ExcelPreviewDialog = ({
                     {previewData.map((row, index) => (
                       <TableRow key={index} hover>
                         <TableCell sx={{ fontWeight: 'medium' }}>
-                          {row._originalRow}
+                          {processAllSheets ? row._globalRowIndex : row._originalRow}
                         </TableCell>
+                        {processAllSheets && (
+                          <TableCell sx={{ bgcolor: 'secondary.50' }}>
+                            <Chip 
+                              label={row._sheetDisplayName || row._sourceSheet} 
+                              size="small" 
+                              variant="outlined"
+                              color="secondary"
+                            />
+                          </TableCell>
+                        )}
                         {expectedColumns.map((column) => (
                           <TableCell key={column.key}>
                             {renderCell(row, index, column)}
@@ -896,7 +1022,18 @@ const ExcelPreviewDialog = ({
               <Box sx={{ p: 3 }}>
                 {selectedSheet && availableSheets.length > 1 && (
                   <Alert severity="info" sx={{ mb: 2 }}>
-                    Validation results for sheet: <strong>{selectedSheet}</strong>
+                    {processAllSheets ? (
+                      <Box>
+                        <Typography variant="subtitle2">Validation results for combined data from all sheets:</Typography>
+                        <Typography variant="body2">
+                          {Object.entries(sheetsData).map(([sheetName, data]) => 
+                            `${data.sheetInfo.displayName}: ${data.rowCount} rows`
+                          ).join(', ')}
+                        </Typography>
+                      </Box>
+                    ) : (
+                      <Typography>Validation results for sheet: <strong>{selectedSheet}</strong></Typography>
+                    )}
                   </Alert>
                 )}
                 {errors.length === 0 ? (
@@ -945,21 +1082,47 @@ const ExcelPreviewDialog = ({
             {availableSheets.length > 1 && (
               <Box sx={{ p: 3, bgcolor: 'primary.50', borderTop: 1, borderColor: 'divider' }}>
                 <Typography variant="subtitle2" gutterBottom>
-                  Select Excel Sheet to Preview:
+                  Select Data Source:
                 </Typography>
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                  {availableSheets.map((sheet) => (
-                    <Chip
-                      key={sheet.name}
-                      label={`${sheet.displayName} (${sheet.name})`}
-                      onClick={() => handleSheetChange(sheet.name)}
-                      color={selectedSheet === sheet.name ? 'primary' : 'default'}
-                      variant={selectedSheet === sheet.name ? 'filled' : 'outlined'}
-                      sx={{ cursor: 'pointer' }}
-                    />
-                  ))}
+                
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+                  {/* All Sheets Option */}
+                  <Chip
+                    label={`🔗 All Sheets Combined (${combinedData.length} rows)`}
+                    onClick={toggleAllSheetsMode}
+                    color={processAllSheets ? 'secondary' : 'default'}
+                    variant={processAllSheets ? 'filled' : 'outlined'}
+                    sx={{ cursor: 'pointer', fontWeight: 'bold' }}
+                  />
+                  
+                  {/* Individual Sheet Options */}
+                  {availableSheets.map((sheet) => {
+                    const sheetRowCount = sheetsData[sheet.name]?.rowCount || 0;
+                    return (
+                      <Chip
+                        key={sheet.name}
+                        label={`${sheet.displayName} (${sheetRowCount} rows)`}
+                        onClick={() => {
+                          if (processAllSheets) {
+                            setProcessAllSheets(false);
+                          }
+                          handleSheetChange(sheet.name);
+                        }}
+                        color={selectedSheet === sheet.name && !processAllSheets ? 'primary' : 'default'}
+                        variant={selectedSheet === sheet.name && !processAllSheets ? 'filled' : 'outlined'}
+                        sx={{ cursor: 'pointer' }}
+                      />
+                    );
+                  })}
                 </Box>
-                {selectedSheet && (
+                
+                {processAllSheets ? (
+                  <Alert severity="info" sx={{ mt: 1 }}>
+                    <Typography variant="caption">
+                      📊 Viewing combined data from all {availableSheets.length} sheets ({combinedData.length} total rows)
+                    </Typography>
+                  </Alert>
+                ) : selectedSheet && (
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
                     Currently viewing: {selectedSheet}
                   </Typography>
