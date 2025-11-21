@@ -10,6 +10,7 @@ import Profile from './pages/Profile';
 import CategoryDetails from './pages/CategoryDetails';
 import AdminPanel from './pages/AdminPanel';
 import SearchResults from './pages/SearchResults';
+import UploadErrorsPage from './pages/UploadErrorsPage';
 import ProtectedRoute from './components/common/ProtectedRoute';
 import ErrorBoundary from './components/common/ErrorBoundary';
 
@@ -77,6 +78,15 @@ function App() {
           element={
             <ProtectedRoute>
               <SearchResults />
+            </ProtectedRoute>
+          } 
+        />
+        
+        <Route 
+          path="/upload-errors" 
+          element={
+            <ProtectedRoute>
+              <UploadErrorsPage />
             </ProtectedRoute>
           } 
         />

@@ -578,6 +578,55 @@ router.post('/bulk-delete', auth, authorize(['admin']), async (req, res) => {
   }
 });
 
+// @route   POST /api/products/check-duplicates
+// @desc    Check if model numbers already exist in the database
+// @access  Private
+router.post('/check-duplicates', auth, async (req, res) => {
+  try {
+    const { modelNumbers, categoryId } = req.body;
+    
+    if (!modelNumbers || !Array.isArray(modelNumbers)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Model numbers array is required'
+      });
+    }
+
+    // Find existing products with these model numbers
+    const filter = {
+      modelNumber: { $in: modelNumbers },
+      isActive: true
+    };
+
+    // If category is specified, filter by category too
+    if (categoryId) {
+      filter.category = categoryId;
+    }
+
+    const existingProducts = await Product.find(filter).select('modelNumber phase');
+    
+    // Extract just the model numbers that exist
+    const duplicates = existingProducts.map(product => product.modelNumber);
+    
+    res.json({
+      success: true,
+      duplicates: [...new Set(duplicates)], // Remove duplicates from the array
+      existingProducts: existingProducts.map(p => ({
+        modelNumber: p.modelNumber,
+        phase: p.phase,
+        id: p._id
+      }))
+    });
+
+  } catch (error) {
+    console.error('Check duplicates error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while checking duplicates'
+    });
+  }
+});
+
 // @route   POST /api/products/bulk-upload
 // @desc    Bulk upload products via Excel
 // @access  Private (Admin, Project User)

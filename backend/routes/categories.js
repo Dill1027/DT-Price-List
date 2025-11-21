@@ -1,12 +1,13 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const Category = require('../models/Category');
+const Product = require('../models/Product');
 const { auth, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
 // @route   GET /api/categories
-// @desc    Get all categories
+// @desc    Get all categories with product counts
 // @access  Private
 router.get('/', auth, async (req, res) => {
   try {
@@ -15,10 +16,25 @@ router.get('/', auth, async (req, res) => {
       .populate('updatedBy', 'username')
       .sort({ name: 1 });
 
+    // Get product counts for each category
+    const categoriesWithCounts = await Promise.all(
+      categories.map(async (category) => {
+        const productCount = await Product.countDocuments({ 
+          category: category._id,
+          isActive: true 
+        });
+        
+        return {
+          ...category.toObject(),
+          productCount
+        };
+      })
+    );
+
     res.json({
       success: true,
-      count: categories.length,
-      data: categories
+      count: categoriesWithCounts.length,
+      data: categoriesWithCounts
     });
   } catch (error) {
     console.error('Get categories error:', error);

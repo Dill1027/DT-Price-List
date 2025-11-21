@@ -29,6 +29,9 @@ import {
   Divider,
   Tooltip,
   TextField,
+  Card,
+  CardContent,
+  CardActions,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import {
@@ -39,8 +42,14 @@ import {
   Delete as DeleteIcon,
   FilterList as FilterIcon,
   ViewColumn as ViewColumnIcon,
+  Business as BusinessIcon,
+  Memory as MemoryIcon,
+  Power as PowerIcon,
+  Speed as SpeedIcon,
+  WaterDrop as WaterDropIcon,
+  ElectricalServices as ElectricalServicesIcon,
 } from '@mui/icons-material';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { saveAs } from 'file-saver';
@@ -49,9 +58,12 @@ import Header from '../components/common/Header';
 import Footer from '../components/common/Footer';
 import AddProductForm from '../components/AddProductForm';
 import EditProductForm from '../components/EditProductForm';
+import ExcelPreviewDialog from '../components/ExcelPreviewDialog';
 
 const CategoryDetails = () => {
   const { categoryId } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -72,6 +84,7 @@ const CategoryDetails = () => {
     phase: '',
     price: '',
   });
+  const [mobileSearch, setMobileSearch] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [addDialog, setAddDialog] = useState(false);
   const [editDialog, setEditDialog] = useState(false);
@@ -81,6 +94,11 @@ const CategoryDetails = () => {
   const [selectedProducts, setSelectedProducts] = useState([]);
   const [bulkDeleteDialog, setBulkDeleteDialog] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [previewDialog, setPreviewDialog] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [retryUploadInfo, setRetryUploadInfo] = useState(null);
+  const [uploadResultsDialog, setUploadResultsDialog] = useState(false);
+  const [uploadResults, setUploadResults] = useState(null);
   
   // Column visibility state - show all details by default
   const [columnVisibilityMenuAnchor, setColumnVisibilityMenuAnchor] = useState(null);
@@ -103,10 +121,32 @@ const CategoryDetails = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [categoryId]);
 
+  // Handle retry upload from error page
+  useEffect(() => {
+    if (location.state?.retryUpload || location.state?.fixAndRetry) {
+      setRetryUploadInfo({
+        previousErrors: location.state.previousErrors || [],
+        suggestions: location.state.suggestions || [],
+        uploadSummary: location.state.uploadSummary || {}
+      });
+      
+      // Show helpful message
+      if (location.state.retryUpload) {
+        toast.info('Ready to retry upload. Please select your corrected Excel file.');
+      } else if (location.state.fixAndRetry) {
+        toast.info('Apply the suggested fixes to your Excel file before uploading.');
+      }
+      
+      // Clear the navigation state
+      navigate(location.pathname, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     applyFilters();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, filters]);
+  }, [products, filters, mobileSearch, isMobile]);
 
   const fetchCategoryData = async () => {
     try {
@@ -188,15 +228,23 @@ const CategoryDetails = () => {
   const applyFilters = () => {
     let filtered = [...products];
     
-    // Apply all filters
-    filtered = applyBrandFilter(filtered);
-    filtered = applyHpFilter(filtered);
-    filtered = applyOutletFilter(filtered);
-    filtered = applyMaxHeadFilter(filtered);
-    filtered = applyMaxFlowFilter(filtered);
-    filtered = applyWattFilter(filtered);
-    filtered = applyPhaseFilter(filtered);
-    filtered = applyPriceFilter(filtered);
+    // Apply mobile search or desktop filters
+    if (isMobile && mobileSearch) {
+      // Mobile: search only by model number
+      filtered = filtered.filter(product => 
+        product.modelNumber.toLowerCase().includes(mobileSearch.toLowerCase())
+      );
+    } else if (!isMobile) {
+      // Desktop: apply all filters
+      filtered = applyBrandFilter(filtered);
+      filtered = applyHpFilter(filtered);
+      filtered = applyOutletFilter(filtered);
+      filtered = applyMaxHeadFilter(filtered);
+      filtered = applyMaxFlowFilter(filtered);
+      filtered = applyWattFilter(filtered);
+      filtered = applyPhaseFilter(filtered);
+      filtered = applyPriceFilter(filtered);
+    }
     
     setFilteredProducts(filtered);
   };
@@ -245,13 +293,38 @@ const CategoryDetails = () => {
     }
   };
 
-  const handleBulkUpload = async (event) => {
+  const handleFileSelect = (event) => {
     const file = event.target.files[0];
     if (!file) return;
 
+    // Validate file type
+    const allowedTypes = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'text/csv'
+    ];
+    
+    if (!allowedTypes.includes(file.type) && !file.name.match(/\.(xlsx|xls|csv)$/i)) {
+      toast.error('Please select a valid Excel file (.xlsx, .xls) or CSV file');
+      event.target.value = '';
+      return;
+    }
+
+    setSelectedFile(file);
+    setPreviewDialog(true);
+    event.target.value = '';
+  };
+
+  const handleConfirmUpload = async (previewData) => {
+    if (!selectedFile) return;
+
+    // Create FormData with the original file for server processing
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('file', selectedFile);
     formData.append('categoryId', categoryId);
+    
+    // Also send the preview data for validation
+    formData.append('previewData', JSON.stringify(previewData));
 
     setUploading(true);
     try {
@@ -261,33 +334,43 @@ const CategoryDetails = () => {
         },
       });
 
-      // Show detailed success message based on actions taken
+      // Store detailed results for dialog display
       const data = response.data.data;
       const summary = data.summary;
       
-      let successMsg = 'Upload completed! ';
-      const details = [];
+      setUploadResults({
+        success: true,
+        summary,
+        errors: data.errors || [],
+        totalProcessed: (summary?.created || 0) + (summary?.priceUpdated || 0) + (summary?.detailsUpdated || 0) + (summary?.noChangeNeeded || 0),
+        categoryName: category?.name || 'Unknown Category'
+      });
       
-      if (summary?.created > 0) details.push(`${summary.created} new products`);
-      if (summary?.priceUpdated > 0) details.push(`${summary.priceUpdated} prices updated`);
-      if (summary?.detailsUpdated > 0) details.push(`${summary.detailsUpdated} details updated`);
-      if (summary?.noChangeNeeded > 0) details.push(`${summary.noChangeNeeded} unchanged`);
+      // Show results dialog
+      setUploadResultsDialog(true);
       
-      if (details.length > 0) {
-        successMsg += details.join(', ');
+      // Quick toast for immediate feedback
+      const hasErrors = data.errors && data.errors.length > 0;
+      if (hasErrors) {
+        toast.success(`Upload completed with ${data.errors.length} issue(s). Click 'View Details' for more info.`);
+      } else {
+        toast.success('Upload completed successfully!');
       }
       
-      if (data.errors && data.errors.length > 0) {
-        successMsg += `. ${data.errors.length} errors occurred.`;
-        // You could also show detailed error information if needed
-        console.log('Upload errors:', data.errors);
-      }
-
-      toast.success(successMsg);
       fetchCategoryData();
-      event.target.value = '';
+      setPreviewDialog(false);
+      setSelectedFile(null);
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to upload products');
+      // Store error results for dialog
+      setUploadResults({
+        success: false,
+        error: error.response?.data?.message || 'Failed to upload products',
+        details: error.response?.data?.details || 'Unknown error occurred',
+        categoryName: category?.name || 'Unknown Category'
+      });
+      
+      setUploadResultsDialog(true);
+      toast.error('Upload failed. Click \'View Details\' for more information.');
     } finally {
       setUploading(false);
     }
@@ -311,10 +394,7 @@ const CategoryDetails = () => {
     }
   };
 
-  const getUploadButtonText = () => {
-    if (isMobile) return '';
-    return uploading ? 'Uploading...' : 'Import';
-  };
+
 
   // Helper function to create base columns
   const createBaseColumns = () => [
@@ -555,99 +635,345 @@ const CategoryDetails = () => {
 
   const canAddProduct = user?.role === 'admin' || user?.role === 'project_user';
 
-  // Helper function to render toolbar buttons
-  const renderToolbarButtons = () => (
-    <Box sx={{ 
-      display: 'flex', 
-      flexWrap: 'wrap', 
-      gap: 1,
-      width: { xs: '100%', sm: 'auto' }
-    }}>
-      <Button
-        startIcon={<FilterIcon />}
-        onClick={() => setShowFilters(!showFilters)}
-        size={isMobile ? "small" : "medium"}
-        variant={showFilters ? "contained" : "outlined"}
-      >
-        Filters
-      </Button>
+  // Mobile-friendly product card component
+  const renderMobileProductCard = (product) => (
+    <Card key={product._id} sx={{ mb: 2, position: 'relative' }}>
+      <CardContent sx={{ pb: 1 }}>
+        {/* Header with Model Number and Brand */}
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="h6" component="div" sx={{ fontWeight: 'bold', fontSize: '1.1rem' }}>
+              {product.modelNumber}
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', mt: 0.5 }}>
+              <BusinessIcon sx={{ fontSize: 16, color: 'text.secondary', mr: 0.5 }} />
+              <Typography variant="body2" color="text.secondary">
+                {product.brand?.name || 'N/A'}
+              </Typography>
+            </Box>
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <Typography variant="h6" color="success.main" sx={{ fontWeight: 'bold' }}>
+              {product.price ? new Intl.NumberFormat('en-LK', {
+                style: 'currency',
+                currency: 'LKR',
+                minimumFractionDigits: 0,
+              }).format(product.price) : 'N/A'}
+            </Typography>
+          </Box>
+        </Box>
 
-      <Tooltip title="Column Visibility">
-        <Button
-          startIcon={<ViewColumnIcon />}
-          onClick={handleColumnVisibilityMenuOpen}
-          size={isMobile ? "small" : "medium"}
-          variant="outlined"
-        >
-          {isMobile ? '' : 'Columns'}
-        </Button>
-      </Tooltip>
-
-      <Button
-        startIcon={<DownloadIcon />}
-        onClick={handleExport}
-        size={isMobile ? "small" : "medium"}
-        variant="outlined"
-      >
-        {isMobile ? '' : 'Export'}
-      </Button>
-
-      {(user?.role === 'admin' || user?.role === 'project_user') && (
-        <>
-          <input
-            accept=".xlsx,.xls"
-            style={{ display: 'none' }}
-            id="bulk-upload"
-            type="file"
-            onChange={handleBulkUpload}
-            disabled={uploading}
-          />
-          <label htmlFor="bulk-upload">
-            <Button
-              component="span"
-              startIcon={uploading ? <CircularProgress size={16} /> : <UploadIcon />}
-              disabled={uploading}
-              size={isMobile ? "small" : "medium"}
-              variant="outlined"
-            >
-              {getUploadButtonText()}
-            </Button>
-          </label>
-
+        {/* Product Details Grid */}
+        <Grid container spacing={1} sx={{ mt: 1 }}>
+          {product.hp && (
+            <Grid item xs={6}>
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <PowerIcon sx={{ fontSize: 16, color: 'primary.main', mr: 1 }} />
+                <Box>
+                  <Typography variant="caption" display="block" color="text.secondary">HP</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>{product.hp}</Typography>
+                </Box>
+              </Box>
+            </Grid>
+          )}
+          
+          {product.outlet && (
+            <Grid item xs={6}>
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <WaterDropIcon sx={{ fontSize: 16, color: 'info.main', mr: 1 }} />
+                <Box>
+                  <Typography variant="caption" display="block" color="text.secondary">Outlet</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>{product.outlet}</Typography>
+                </Box>
+              </Box>
+            </Grid>
+          )}
+          
+          {product.maxHead && (
+            <Grid item xs={6}>
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <SpeedIcon sx={{ fontSize: 16, color: 'warning.main', mr: 1 }} />
+                <Box>
+                  <Typography variant="caption" display="block" color="text.secondary">Max Head</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>{product.maxHead}m</Typography>
+                </Box>
+              </Box>
+            </Grid>
+          )}
+          
+          {product.maxFlow && (
+            <Grid item xs={6}>
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <WaterDropIcon sx={{ fontSize: 16, color: 'info.main', mr: 1 }} />
+                <Box>
+                  <Typography variant="caption" display="block" color="text.secondary">Max Flow</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>{product.maxFlow} l/min</Typography>
+                </Box>
+              </Box>
+            </Grid>
+          )}
+          
+          {product.watt && (
+            <Grid item xs={6}>
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <ElectricalServicesIcon sx={{ fontSize: 16, color: 'secondary.main', mr: 1 }} />
+                <Box>
+                  <Typography variant="caption" display="block" color="text.secondary">Watt</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>{product.watt}W</Typography>
+                </Box>
+              </Box>
+            </Grid>
+          )}
+          
+          {product.phase && (
+            <Grid item xs={6}>
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <MemoryIcon sx={{ fontSize: 16, color: 'error.main', mr: 1 }} />
+                <Box>
+                  <Typography variant="caption" display="block" color="text.secondary">Phase</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>{product.phase}</Typography>
+                </Box>
+              </Box>
+            </Grid>
+          )}
+        </Grid>
+      </CardContent>
+      
+      {/* Actions for Admin */}
+      {user?.role === 'admin' && (
+        <CardActions sx={{ pt: 0, pb: 2, px: 2 }}>
           <Button
-            startIcon={<DownloadIcon />}
-            onClick={downloadTemplate}
-            size={isMobile ? "small" : "medium"}
+            size="small"
+            startIcon={<EditIcon />}
+            onClick={() => handleEdit(product)}
+            variant="outlined"
+            sx={{ mr: 1 }}
+          >
+            Edit
+          </Button>
+          <Button
+            size="small"
+            startIcon={<DeleteIcon />}
+            onClick={() => handleDelete(product)}
+            color="error"
             variant="outlined"
           >
-            {isMobile ? '' : 'Template'}
+            Delete
           </Button>
-
-          <Button
-            startIcon={<AddIcon />}
-            onClick={() => setAddDialog(true)}
-            size={isMobile ? "small" : "medium"}
-            variant="contained"
-          >
-            {isMobile ? '' : 'Add Product'}
-          </Button>
-
-          {user?.role === 'admin' && (
-            <Button
-              startIcon={<DeleteIcon />}
-              onClick={handleBulkDelete}
-              size={isMobile ? "small" : "medium"}
-              variant="outlined"
-              color="error"
-              disabled={selectedProducts.length === 0}
-            >
-              {isMobile ? '' : `Delete (${selectedProducts.length})`}
-            </Button>
-          )}
-        </>
+        </CardActions>
       )}
-    </Box>
+      
+      {/* Selection Checkbox for Admin (Mobile) */}
+      {user?.role === 'admin' && (
+        <Checkbox
+          checked={selectedProducts.includes(product._id)}
+          onChange={(e) => {
+            const newSelection = e.target.checked 
+              ? [...selectedProducts, product._id]
+              : selectedProducts.filter(id => id !== product._id);
+            setSelectedProducts(newSelection);
+          }}
+          size="small"
+          sx={{ 
+            position: 'absolute', 
+            bottom: 4, 
+            right: 4,
+            zIndex: 1,
+            backgroundColor: 'rgba(255, 255, 255, 0.9)',
+            borderRadius: '50%',
+            '&:hover': {
+              backgroundColor: 'rgba(255, 255, 255, 1)',
+            }
+          }}
+        />
+      )}
+    </Card>
   );
+
+  // Helper function to render toolbar buttons
+  const renderToolbarButtons = () => {
+    if (isMobile) {
+      // Mobile: Simplified toolbar with essential actions only
+      return (
+        <Box sx={{ width: '100%' }}>
+          {/* Mobile Search Bar */}
+          <TextField
+            fullWidth
+            placeholder="Search by model number..."
+            value={mobileSearch}
+            onChange={(e) => setMobileSearch(e.target.value)}
+            size="small"
+            sx={{ mb: 2 }}
+            InputProps={{
+              startAdornment: (
+                <FilterIcon sx={{ color: 'action.active', mr: 1 }} />
+              ),
+            }}
+          />
+          
+          {/* Mobile Action Buttons */}
+          <Box sx={{ 
+            display: 'flex', 
+            flexWrap: 'wrap', 
+            gap: 1,
+            justifyContent: 'center'
+          }}>
+            <Button
+              startIcon={<DownloadIcon />}
+              onClick={handleExport}
+              size="small"
+              variant="outlined"
+              sx={{ minWidth: 80 }}
+            >
+              Export
+            </Button>
+            
+            {(user?.role === 'admin' || user?.role === 'project_user') && (
+              <>
+                <input
+                  accept=".xlsx,.xls,.csv"
+                  style={{ display: 'none' }}
+                  id="mobile-bulk-upload"
+                  type="file"
+                  onChange={handleFileSelect}
+                  disabled={uploading}
+                />
+                <label htmlFor="mobile-bulk-upload">
+                  <Button
+                    component="span"
+                    startIcon={uploading ? <CircularProgress size={16} /> : <UploadIcon />}
+                    disabled={uploading}
+                    size="small"
+                    variant="outlined"
+                    sx={{ minWidth: 80 }}
+                  >
+                    Import
+                  </Button>
+                </label>
+                
+                <Button
+                  startIcon={<DownloadIcon />}
+                  onClick={downloadTemplate}
+                  size="small"
+                  variant="outlined"
+                  sx={{ minWidth: 90 }}
+                >
+                  Template
+                </Button>
+                
+                {user?.role === 'admin' && selectedProducts.length > 0 && (
+                  <Button
+                    startIcon={<DeleteIcon />}
+                    onClick={handleBulkDelete}
+                    size="small"
+                    variant="outlined"
+                    color="error"
+                    sx={{ minWidth: 80 }}
+                  >
+                    Delete ({selectedProducts.length})
+                  </Button>
+                )}
+              </>
+            )}
+          </Box>
+        </Box>
+      );
+    }
+    
+    // Desktop: Full toolbar with all features
+    return (
+      <Box sx={{ 
+        display: 'flex', 
+        flexWrap: 'wrap', 
+        gap: 1,
+        width: { xs: '100%', sm: 'auto' }
+      }}>
+        <Button
+          startIcon={<FilterIcon />}
+          onClick={() => setShowFilters(!showFilters)}
+          size="medium"
+          variant={showFilters ? "contained" : "outlined"}
+        >
+          Filters
+        </Button>
+
+        <Tooltip title="Column Visibility">
+          <Button
+            startIcon={<ViewColumnIcon />}
+            onClick={handleColumnVisibilityMenuOpen}
+            size="medium"
+            variant="outlined"
+          >
+            Columns
+          </Button>
+        </Tooltip>
+
+        <Button
+          startIcon={<DownloadIcon />}
+          onClick={handleExport}
+          size="medium"
+          variant="outlined"
+        >
+          Export
+        </Button>
+
+        {(user?.role === 'admin' || user?.role === 'project_user') && (
+          <>
+            <input
+              accept=".xlsx,.xls,.csv"
+              style={{ display: 'none' }}
+              id="bulk-upload"
+              type="file"
+              onChange={handleFileSelect}
+              disabled={uploading}
+            />
+            <label htmlFor="bulk-upload">
+              <Button
+                component="span"
+                startIcon={uploading ? <CircularProgress size={16} /> : <UploadIcon />}
+                disabled={uploading}
+                size="medium"
+                variant="outlined"
+              >
+                Import
+              </Button>
+            </label>
+
+            <Button
+              startIcon={<DownloadIcon />}
+              onClick={downloadTemplate}
+              size="medium"
+              variant="outlined"
+            >
+              Template
+            </Button>
+
+            <Button
+              startIcon={<AddIcon />}
+              onClick={() => setAddDialog(true)}
+              size="medium"
+              variant="contained"
+            >
+              Add Product
+            </Button>
+
+            {user?.role === 'admin' && (
+              <Button
+                startIcon={<DeleteIcon />}
+                onClick={handleBulkDelete}
+                size="medium"
+                variant="outlined"
+                color="error"
+                disabled={selectedProducts.length === 0}
+              >
+                Delete ({selectedProducts.length})
+              </Button>
+            )}
+          </>
+        )}
+      </Box>
+    );
+  };
 
   // Helper function to render filter fields - comprehensive filtering for all data
   const renderFilterFields = () => (
@@ -1021,6 +1347,170 @@ const CategoryDetails = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Upload Results Dialog */}
+      {uploadResults && (
+        <Dialog 
+          open={uploadResultsDialog}
+          onClose={() => {
+            setUploadResultsDialog(false);
+            setUploadResults(null);
+          }}
+          maxWidth="md"
+          fullWidth
+        >
+          <DialogTitle>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              {uploadResults.success ? (
+                <span style={{ color: '#4caf50', fontSize: '24px' }}>✅</span>
+              ) : (
+                <span style={{ color: '#f44336', fontSize: '24px' }}>❌</span>
+              )}
+              <Typography variant="h6">
+                Upload {uploadResults.success ? 'Completed' : 'Failed'}
+              </Typography>
+            </Box>
+          </DialogTitle>
+          
+          <DialogContent>
+            {uploadResults.success ? (
+              <Box>
+                <Typography variant="subtitle1" gutterBottom>
+                  Upload Summary for {uploadResults.categoryName}
+                </Typography>
+                
+                <Grid container spacing={2} sx={{ mb: 3 }}>
+                  <Grid item xs={6} sm={3}>
+                    <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'success.50' }}>
+                      <Typography variant="h4" color="success.main">
+                        {uploadResults.summary?.created || 0}
+                      </Typography>
+                      <Typography variant="body2">New Products</Typography>
+                    </Paper>
+                  </Grid>
+                  <Grid item xs={6} sm={3}>
+                    <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'info.50' }}>
+                      <Typography variant="h4" color="info.main">
+                        {uploadResults.summary?.priceUpdated || 0}
+                      </Typography>
+                      <Typography variant="body2">Price Updates</Typography>
+                    </Paper>
+                  </Grid>
+                  <Grid item xs={6} sm={3}>
+                    <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'warning.50' }}>
+                      <Typography variant="h4" color="warning.main">
+                        {uploadResults.summary?.detailsUpdated || 0}
+                      </Typography>
+                      <Typography variant="body2">Detail Updates</Typography>
+                    </Paper>
+                  </Grid>
+                  <Grid item xs={6} sm={3}>
+                    <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'grey.100' }}>
+                      <Typography variant="h4" color="text.secondary">
+                        {uploadResults.summary?.noChangeNeeded || 0}
+                      </Typography>
+                      <Typography variant="body2">No Changes</Typography>
+                    </Paper>
+                  </Grid>
+                </Grid>
+                
+                {uploadResults.errors.length > 0 && (
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    <Typography variant="subtitle2" gutterBottom>
+                      {uploadResults.errors.length} issue(s) occurred during upload:
+                    </Typography>
+                    <Typography variant="body2">
+                      Some rows had validation errors. You can view detailed error information or retry the upload with corrections.
+                    </Typography>
+                  </Alert>
+                )}
+                
+                <Typography variant="body1" color="text.secondary">
+                  Total processed: {uploadResults.totalProcessed} rows
+                </Typography>
+              </Box>
+            ) : (
+              <Box>
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Upload Failed
+                  </Typography>
+                  <Typography variant="body2">
+                    {uploadResults.error}
+                  </Typography>
+                </Alert>
+                
+                {uploadResults.details && (
+                  <Typography variant="body2" color="text.secondary">
+                    {uploadResults.details}
+                  </Typography>
+                )}
+              </Box>
+            )}
+          </DialogContent>
+          
+          <DialogActions>
+            {uploadResults.success && uploadResults.errors.length > 0 && (
+              <Button
+                onClick={() => {
+                  setUploadResultsDialog(false);
+                  navigate('/upload-errors', {
+                    state: {
+                      errors: uploadResults.errors,
+                      summary: uploadResults.summary,
+                      categoryName: uploadResults.categoryName,
+                      categoryId: categoryId
+                    }
+                  });
+                }}
+                color="warning"
+                startIcon={<span>⚠️</span>}
+              >
+                View Errors ({uploadResults.errors.length})
+              </Button>
+            )}
+            
+            {!uploadResults.success && (
+              <Button
+                onClick={() => {
+                  setUploadResultsDialog(false);
+                  setUploadResults(null);
+                  // Reset for retry
+                }}
+                color="primary"
+                variant="outlined"
+              >
+                Try Again
+              </Button>
+            )}
+            
+            <Button
+              onClick={() => {
+                setUploadResultsDialog(false);
+                setUploadResults(null);
+              }}
+              color="primary"
+              variant="contained"
+            >
+              {uploadResults.success ? 'Done' : 'Close'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
+
+      {/* Excel Preview Dialog */}
+      <ExcelPreviewDialog
+        open={previewDialog}
+        onClose={() => {
+          setPreviewDialog(false);
+          setSelectedFile(null);
+        }}
+        file={selectedFile}
+        brands={brands}
+        categoryId={categoryId}
+        onUploadConfirm={handleConfirmUpload}
+        uploading={uploading}
+      />
     </>
   );
 
@@ -1064,6 +1554,39 @@ const CategoryDetails = () => {
           </Typography>
         </Box>
 
+        {/* Retry Upload Notification */}
+        {retryUploadInfo && (
+          <Alert 
+            severity="info" 
+            sx={{ mb: 3 }}
+            action={
+              <Button 
+                size="small" 
+                onClick={() => setRetryUploadInfo(null)}
+                color="inherit"
+              >
+                Dismiss
+              </Button>
+            }
+          >
+            <Typography variant="subtitle2" gutterBottom>
+              Previous upload had {retryUploadInfo.previousErrors.length} error(s)
+            </Typography>
+            <Typography variant="body2">
+              Please review and fix the errors in your Excel file before uploading again.
+              {retryUploadInfo.suggestions.length > 0 && (
+                <Box component="ul" sx={{ mt: 1, pl: 2 }}>
+                  {retryUploadInfo.suggestions.slice(0, 3).map((suggestion, index) => (
+                    <li key={index}>
+                      <Typography variant="caption">{suggestion.action}</Typography>
+                    </li>
+                  ))}
+                </Box>
+              )}
+            </Typography>
+          </Alert>
+        )}
+
         {/* Toolbar */}
         <Paper sx={{ mb: 3 }}>
           <Toolbar 
@@ -1086,68 +1609,107 @@ const CategoryDetails = () => {
           </Toolbar>
         </Paper>
 
-        {/* Filters */}
-        {renderFilterFields()}
+        {/* Filters - Desktop Only */}
+        {!isMobile && renderFilterFields()}
 
-        {/* DataGrid */}
-        <Paper elevation={3} sx={{
-          height: isMobile ? 400 : 'auto',
-          minHeight: isMobile ? 400 : 500,
-          width: '100%',
-          overflow: 'hidden',
-          '& .MuiDataGrid-root': {
-            border: 'none',
-          },
-          '& .MuiDataGrid-columnHeaders': {
-            backgroundColor: theme.palette.primary.main,
-            color: theme.palette.primary.contrastText,
-            fontWeight: 600,
-          },
-          '& .MuiDataGrid-cell': {
-            borderBottom: `1px solid ${theme.palette.divider}`,
-          }
-        }}>
-          <DataGrid
-            rows={filteredProducts}
-            columns={columns}
-            pageSize={isMobile ? 25 : 100}
-            rowsPerPageOptions={isMobile ? [10, 25, 50] : [25, 50, 100]}
-            checkboxSelection={user?.role === 'admin' && !isMobile}
-            disableSelectionOnClick
-            getRowId={(row) => row._id}
-            rowSelectionModel={selectedProducts}
-            onRowSelectionModelChange={handleSelectionModelChange}
-            density={isMobile ? "compact" : "standard"}
-            scrollbarSize={isMobile ? 8 : 17}
-            columnVisibilityModel={{
-              modelNumber: columnVisibility.modelNumber,
-              brand: columnVisibility.brand,
-              hp: columnVisibility.hp,
-              outlet: columnVisibility.outlet,
-              maxHead: columnVisibility.maxHead,
-              maxFlow: columnVisibility.maxFlow,
-              watt: columnVisibility.watt,
-              phase: columnVisibility.phase,
-              price: columnVisibility.price,
-              actions: columnVisibility.actions,
-            }}
-            sx={{
-              '& .MuiDataGrid-cell': {
-                padding: isMobile ? '4px 8px' : '8px 16px',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              },
-              '& .MuiDataGrid-columnHeader': {
-                padding: isMobile ? '4px 8px' : '8px 16px',
-              },
-              '& .MuiDataGrid-virtualScroller': {
-                overflowX: 'auto',
-                WebkitOverflowScrolling: 'touch',
-              }
-            }}
-          />
-        </Paper>
+        {/* Products Display - Mobile Cards vs Desktop DataGrid */}
+        {isMobile ? (
+          /* Mobile Card Layout */
+          <Box sx={{ mb: 2 }}>
+            {/* Mobile bulk actions */}
+            {user?.role === 'admin' && selectedProducts.length > 0 && (
+              <Paper sx={{ p: 2, mb: 2, bgcolor: 'action.hover' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {selectedProducts.length} product(s) selected
+                  </Typography>
+                  <Button
+                    size="small"
+                    startIcon={<DeleteIcon />}
+                    onClick={handleBulkDelete}
+                    color="error"
+                    variant="contained"
+                  >
+                    Delete Selected
+                  </Button>
+                </Box>
+              </Paper>
+            )}
+            
+            {/* Product Cards */}
+            {filteredProducts.length > 0 ? (
+              filteredProducts.map(product => renderMobileProductCard(product))
+            ) : (
+              <Paper sx={{ p: 4, textAlign: 'center' }}>
+                <Typography variant="h6" color="text.secondary">
+                  No products found
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  Try adjusting your filters or add new products
+                </Typography>
+              </Paper>
+            )}
+          </Box>
+        ) : (
+          /* Desktop DataGrid */
+          <Paper elevation={3} sx={{
+            height: 'auto',
+            minHeight: 500,
+            width: '100%',
+            overflow: 'hidden',
+            '& .MuiDataGrid-root': {
+              border: 'none',
+            },
+            '& .MuiDataGrid-columnHeaders': {
+              backgroundColor: theme.palette.primary.main,
+              color: theme.palette.primary.contrastText,
+              fontWeight: 600,
+            },
+            '& .MuiDataGrid-cell': {
+              borderBottom: `1px solid ${theme.palette.divider}`,
+            }
+          }}>
+            <DataGrid
+              rows={filteredProducts}
+              columns={columns}
+              pageSize={100}
+              rowsPerPageOptions={[25, 50, 100]}
+              checkboxSelection={user?.role === 'admin'}
+              disableSelectionOnClick
+              getRowId={(row) => row._id}
+              rowSelectionModel={selectedProducts}
+              onRowSelectionModelChange={handleSelectionModelChange}
+              density="standard"
+              columnVisibilityModel={{
+                modelNumber: columnVisibility.modelNumber,
+                brand: columnVisibility.brand,
+                hp: columnVisibility.hp,
+                outlet: columnVisibility.outlet,
+                maxHead: columnVisibility.maxHead,
+                maxFlow: columnVisibility.maxFlow,
+                watt: columnVisibility.watt,
+                phase: columnVisibility.phase,
+                price: columnVisibility.price,
+                actions: columnVisibility.actions,
+              }}
+              sx={{
+                '& .MuiDataGrid-cell': {
+                  padding: '8px 16px',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                },
+                '& .MuiDataGrid-columnHeader': {
+                  padding: '8px 16px',
+                },
+                '& .MuiDataGrid-virtualScroller': {
+                  overflowX: 'auto',
+                  WebkitOverflowScrolling: 'touch',
+                }
+              }}
+            />
+          </Paper>
+        )}
 
         {/* Mobile Add Button */}
         {canAddProduct && isMobile && (

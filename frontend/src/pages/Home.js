@@ -188,6 +188,8 @@ const Home = () => {
           )}
         </Box>
 
+
+
         <Grid container spacing={{ xs: 2, sm: 3 }} sx={{ mb: 3 }}>
           {filteredCategories.map((category) => (
             <Grid item xs={12} sm={6} md={4} lg={3} key={category._id}>
@@ -226,17 +228,30 @@ const Home = () => {
                   sx={{ height: '100%' }}
                 >
                   <CardContent sx={{ p: { xs: 2, sm: 3 }, pr: canAddCategory ? { xs: 4, sm: 5 } : { xs: 2, sm: 3 } }}>
-                    <Typography 
-                      variant={isMobile ? "subtitle1" : "h6"} 
-                      component="h2" 
-                      gutterBottom
-                      sx={{ 
-                        fontWeight: 'bold',
-                        fontSize: { xs: '1rem', sm: '1.25rem' }
-                      }}
-                    >
-                      {category.name}
-                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                      <Typography 
+                        variant={isMobile ? "subtitle1" : "h6"} 
+                        component="h2" 
+                        sx={{ 
+                          fontWeight: 'bold',
+                          fontSize: { xs: '1rem', sm: '1.25rem' },
+                          flexGrow: 1
+                        }}
+                      >
+                        {category.name}
+                      </Typography>
+                      <Chip 
+                        label={`${category.productCount || 0} items`}
+                        size="small"
+                        color="primary"
+                        variant="outlined"
+                        sx={{ 
+                          ml: 1,
+                          fontSize: { xs: '0.65rem', sm: '0.75rem' },
+                          height: { xs: '20px', sm: '24px' }
+                        }}
+                      />
+                    </Box>
                     {category.description && (
                       <Typography 
                         variant="body2" 
