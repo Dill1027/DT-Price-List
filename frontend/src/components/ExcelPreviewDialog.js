@@ -13,7 +13,6 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  Paper,
   TextField,
   Chip,
   Alert,
@@ -21,7 +20,6 @@ import {
   Tooltip,
   CircularProgress,
   FormControl,
-  InputLabel,
   Select,
   MenuItem,
   useMediaQuery,
@@ -65,10 +63,12 @@ const ExcelPreviewDialog = ({
   const [validationResults, setValidationResults] = useState({});
   const [loading, setLoading] = useState(false);
   const [duplicateModelNumbers, setDuplicateModelNumbers] = useState([]);
-  const [bulkEditMode, setBulkEditMode] = useState(false);
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
   const [editValidation, setEditValidation] = useState({ type: 'default', message: '' });
   const [validatingEdit, setValidatingEdit] = useState(false);
+  const [availableSheets, setAvailableSheets] = useState([]);
+  const [selectedSheet, setSelectedSheet] = useState('');
+  const [workbookData, setWorkbookData] = useState(null);
 
   // Column definitions for product data
   const expectedColumns = [
@@ -109,7 +109,7 @@ const ExcelPreviewDialog = ({
     if (editingCell && editValue !== '') {
       const [rowIndex, columnKey] = editingCell.split('-');
       const timeoutId = setTimeout(() => {
-        validateEditValue(editValue, columnKey, parseInt(rowIndex));
+        validateEditValue(editValue, columnKey, Number.parseInt(rowIndex, 10));
       }, 500); // 500ms debounce
       
       return () => clearTimeout(timeoutId);
@@ -119,13 +119,36 @@ const ExcelPreviewDialog = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editValue, editingCell]);
 
-  const parseExcelFile = async () => {
+  const parseExcelFile = async (sheetName = null) => {
     setLoading(true);
     try {
       const arrayBuffer = await file.arrayBuffer();
       const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-      const firstSheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[firstSheetName];
+      
+      // Store workbook data for sheet switching
+      setWorkbookData(workbook);
+      
+      // Get all available sheets
+      const sheetNames = workbook.SheetNames;
+      setAvailableSheets(sheetNames.map((name, index) => ({
+        name,
+        index,
+        displayName: name || `Sheet ${index + 1}`
+      })));
+      
+      // Use selected sheet or first sheet as default
+      const targetSheetName = sheetName || selectedSheet || sheetNames[0];
+      if (!selectedSheet && !sheetName) {
+        setSelectedSheet(targetSheetName);
+      }
+      
+      const worksheet = workbook.Sheets[targetSheetName];
+      
+      if (!worksheet) {
+        setErrors([{ message: `Sheet '${targetSheetName}' not found in Excel file`, row: 0, type: 'error' }]);
+        setPreviewData([]);
+        return;
+      }
       
       // Convert to JSON with header row
       const jsonData = XLSX.utils.sheet_to_json(worksheet, { 
@@ -339,7 +362,7 @@ const ExcelPreviewDialog = ({
     
     const [rowIndex, columnKey] = editingCell.split('-');
     const newData = [...previewData];
-    newData[parseInt(rowIndex)][columnKey] = editValue;
+    newData[Number.parseInt(rowIndex, 10)][columnKey] = editValue;
     
     setPreviewData(newData);
     setEditingCell(null);
@@ -353,6 +376,17 @@ const ExcelPreviewDialog = ({
     setEditValue('');
     setEditValidation({ type: 'default', message: '' });
     setValidatingEdit(false);
+  };
+
+  const handleSheetChange = async (newSheetName) => {
+    setSelectedSheet(newSheetName);
+    setEditingCell(null);
+    setEditValue('');
+    setEditValidation({ type: 'default', message: '' });
+    
+    if (workbookData) {
+      await parseExcelFile(newSheetName);
+    }
   };
 
   const validateEditValue = async (value, columnKey, rowIndex) => {
@@ -810,7 +844,20 @@ const ExcelPreviewDialog = ({
 
             {/* Tab Content */}
             {tabValue === 0 && (
-              <TableContainer sx={{ maxHeight: 500 }}>
+              <Box>
+                {selectedSheet && availableSheets.length > 1 && (
+                  <Box sx={{ p: 2, bgcolor: 'info.50', display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="body2" color="info.main">
+                      📄 Viewing Sheet: <strong>{selectedSheet}</strong>
+                    </Typography>
+                    {availableSheets.length > 1 && (
+                      <Typography variant="caption" color="text.secondary">
+                        ({availableSheets.length} sheets available)
+                      </Typography>
+                    )}
+                  </Box>
+                )}
+                <TableContainer sx={{ maxHeight: 500 }}>
                 <Table stickyHeader size="small">
                   <TableHead>
                     <TableRow>
@@ -841,11 +888,17 @@ const ExcelPreviewDialog = ({
                   </TableBody>
                 </Table>
               </TableContainer>
+              </Box>
             )}
 
             {/* Validation Results Tab */}
             {tabValue === 1 && (
               <Box sx={{ p: 3 }}>
+                {selectedSheet && availableSheets.length > 1 && (
+                  <Alert severity="info" sx={{ mb: 2 }}>
+                    Validation results for sheet: <strong>{selectedSheet}</strong>
+                  </Alert>
+                )}
                 {errors.length === 0 ? (
                   <Alert severity="success">
                     All data is valid and ready for upload!
@@ -884,6 +937,32 @@ const ExcelPreviewDialog = ({
                       </Alert>
                     ))}
                   </>
+                )}
+              </Box>
+            )}
+            
+            {/* Sheet Selector */}
+            {availableSheets.length > 1 && (
+              <Box sx={{ p: 3, bgcolor: 'primary.50', borderTop: 1, borderColor: 'divider' }}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Select Excel Sheet to Preview:
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                  {availableSheets.map((sheet) => (
+                    <Chip
+                      key={sheet.name}
+                      label={`${sheet.displayName} (${sheet.name})`}
+                      onClick={() => handleSheetChange(sheet.name)}
+                      color={selectedSheet === sheet.name ? 'primary' : 'default'}
+                      variant={selectedSheet === sheet.name ? 'filled' : 'outlined'}
+                      sx={{ cursor: 'pointer' }}
+                    />
+                  ))}
+                </Box>
+                {selectedSheet && (
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                    Currently viewing: {selectedSheet}
+                  </Typography>
                 )}
               </Box>
             )}
