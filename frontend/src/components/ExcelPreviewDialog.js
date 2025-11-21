@@ -72,6 +72,9 @@ const ExcelPreviewDialog = ({
   const [processAllSheets, setProcessAllSheets] = useState(false);
   const [combinedData, setCombinedData] = useState([]);
   const [sheetsData, setSheetsData] = useState({});
+  const [productWiseView, setProductWiseView] = useState(false);
+  const [productGroups, setProductGroups] = useState({});
+  const [selectedProduct, setSelectedProduct] = useState('ALL');
 
   // Column definitions for product data
   const expectedColumns = [
@@ -124,6 +127,14 @@ const ExcelPreviewDialog = ({
 
   const parseExcelFile = async (sheetName = null, processAll = false) => {
     setLoading(true);
+    
+    // Reset product-wise states when parsing new file
+    if (!sheetName && !processAll) {
+      setProductWiseView(false);
+      setProductGroups({});
+      setSelectedProduct('ALL');
+    }
+    
     try {
       const arrayBuffer = await file.arrayBuffer();
       const workbook = XLSX.read(arrayBuffer, { type: 'array' });
@@ -399,6 +410,81 @@ const ExcelPreviewDialog = ({
     }
   };
 
+  const organizeDataByProduct = (data) => {
+    const productGroups = {};
+    
+    data.forEach(row => {
+      // Extract product identifier from model number or brand
+      const modelNumber = row.modelNumber || row.model || '';
+      const brand = row.brand || '';
+      
+      // Create product key based on brand and model series
+      let productKey = 'Other Products';
+      
+      if (brand && modelNumber) {
+        // Extract product series from model number
+        const modelSeries = extractProductSeries(modelNumber);
+        productKey = `${brand} - ${modelSeries}`;
+      } else if (brand) {
+        productKey = brand;
+      } else if (modelNumber) {
+        const modelSeries = extractProductSeries(modelNumber);
+        productKey = modelSeries || 'Unknown Product';
+      }
+      
+      if (!productGroups[productKey]) {
+        productGroups[productKey] = {
+          name: productKey,
+          items: [],
+          count: 0,
+          sheets: new Set()
+        };
+      }
+      
+      productGroups[productKey].items.push(row);
+      productGroups[productKey].count++;
+      if (row._sourceSheet) {
+        productGroups[productKey].sheets.add(row._sourceSheet);
+      }
+    });
+    
+    return productGroups;
+  };
+
+  const extractProductSeries = (modelNumber) => {
+    if (!modelNumber) return 'Unknown';
+    
+    // Extract series patterns (e.g., "DT-100", "XYZ-200", "ABC123")
+    const seriesMatch = modelNumber.match(/([A-Za-z]+)[\-_]?([0-9]{1,3})/i);
+    if (seriesMatch) {
+      return `${seriesMatch[1].toUpperCase()}-${seriesMatch[2][0]}xx Series`;
+    }
+    
+    // Extract brand prefix (first 3-4 letters)
+    const prefixMatch = modelNumber.match(/^([A-Za-z]{2,4})/i);
+    if (prefixMatch) {
+      return `${prefixMatch[1].toUpperCase()} Series`;
+    }
+    
+    return 'Mixed Products';
+  };
+
+  const getProductGroup = (row) => {
+    const modelNumber = row.modelNumber || row.model || '';
+    const brand = row.brand || '';
+    
+    if (brand && modelNumber) {
+      const modelSeries = extractProductSeries(modelNumber);
+      return `${brand} - ${modelSeries}`;
+    } else if (brand) {
+      return brand;
+    } else if (modelNumber) {
+      return extractProductSeries(modelNumber) || 'Unknown Product';
+    }
+    
+    return 'Other Products';
+  };
+
   const processAllSheetsData = async (workbook, sheetsInfo) => {
     const allSheetsData = {};
     const combinedRows = [];
@@ -460,9 +546,36 @@ const ExcelPreviewDialog = ({
     
     setSheetsData(allSheetsData);
     setCombinedData(combinedRows);
+    
+    // Organize data by products
+    const productGroups = organizeDataByProduct(combinedRows);
+    setProductGroups(productGroups);
+    
     setPreviewData(combinedRows);
     setProcessAllSheets(true);
     setSelectedSheet('ALL_SHEETS');
+  };
+
+  const toggleProductWiseView = () => {
+    setProductWiseView(!productWiseView);
+    if (!productWiseView) {
+      // Switching to product view - organize current data
+      const currentData = processAllSheets ? combinedData : previewData;
+      const productGroups = organizeDataByProduct(currentData);
+      setProductGroups(productGroups);
+      setSelectedProduct('ALL');
+    }
+  };
+
+  const filterByProduct = (productKey) => {
+    setSelectedProduct(productKey);
+    
+    if (productKey === 'ALL') {
+      const allData = processAllSheets ? combinedData : previewData;
+      setPreviewData(allData);
+    } else if (productGroups[productKey]) {
+      setPreviewData(productGroups[productKey].items);
+    }
   };
 
   const toggleAllSheetsMode = async () => {
@@ -471,6 +584,9 @@ const ExcelPreviewDialog = ({
       setProcessAllSheets(false);
       setCombinedData([]);
       setSheetsData({});
+      setProductGroups({});
+      setProductWiseView(false);
+      setSelectedProduct('ALL');
       if (workbookData && availableSheets.length > 0) {
         await parseExcelFile(availableSheets[0].name);
       }
@@ -846,6 +962,19 @@ const ExcelPreviewDialog = ({
                     variant="outlined"
                   />
                 )}
+                {productWiseView && Object.keys(productGroups).length > 0 && (
+                  <Chip
+                    label={`📦 ${Object.keys(productGroups).length} product groups`}
+                    color="primary"
+                    variant="outlined"
+                  />
+                )}
+                {productWiseView && selectedProduct !== 'ALL' && productGroups[selectedProduct] && (
+                  <Chip
+                    label={`${productGroups[selectedProduct].name}: ${productGroups[selectedProduct].count} items`}
+                    color="secondary"
+                  />
+                )}
                 {errorCount > 0 && (
                   <Chip 
                     label={`${errorCount} errors`} 
@@ -978,6 +1107,11 @@ const ExcelPreviewDialog = ({
                           📄 Source Sheet
                         </TableCell>
                       )}
+                      {productWiseView && (
+                        <TableCell sx={{ fontWeight: 'bold', bgcolor: 'primary.50' }}>
+                          📦 Product Group
+                        </TableCell>
+                      )}
                       {expectedColumns.map((column) => (
                         <TableCell key={column.key} sx={{ fontWeight: 'bold' }}>
                           {column.label}
@@ -1001,6 +1135,16 @@ const ExcelPreviewDialog = ({
                               size="small" 
                               variant="outlined"
                               color="secondary"
+                            />
+                          </TableCell>
+                        )}
+                        {productWiseView && (
+                          <TableCell sx={{ bgcolor: 'primary.50' }}>
+                            <Chip 
+                              label={getProductGroup(row)} 
+                              size="small" 
+                              variant="outlined"
+                              color="primary"
                             />
                           </TableCell>
                         )}
@@ -1030,9 +1174,19 @@ const ExcelPreviewDialog = ({
                             `${data.sheetInfo.displayName}: ${data.rowCount} rows`
                           ).join(', ')}
                         </Typography>
+                        {productWiseView && (
+                          <Typography variant="body2" sx={{ mt: 1 }}>
+                            📦 Organized into {Object.keys(productGroups).length} product groups
+                            {selectedProduct !== 'ALL' && ` - Currently viewing: ${productGroups[selectedProduct]?.name}`}
+                          </Typography>
+                        )}
                       </Box>
                     ) : (
-                      <Typography>Validation results for sheet: <strong>{selectedSheet}</strong></Typography>
+                      <Typography>Validation results for sheet: <strong>{selectedSheet}</strong>
+                        {productWiseView && (
+                          <span> | 📦 Product view: {Object.keys(productGroups).length} groups</span>
+                        )}
+                      </Typography>
                     )}
                   </Alert>
                 )}
@@ -1094,6 +1248,17 @@ const ExcelPreviewDialog = ({
                     variant={processAllSheets ? 'filled' : 'outlined'}
                     sx={{ cursor: 'pointer', fontWeight: 'bold' }}
                   />
+                  
+                  {/* Product-wise View Option */}
+                  {(processAllSheets || previewData.length > 0) && (
+                    <Chip
+                      label={`📦 Product-wise View (${Object.keys(productGroups).length} products)`}
+                      onClick={toggleProductWiseView}
+                      color={productWiseView ? 'primary' : 'default'}
+                      variant={productWiseView ? 'filled' : 'outlined'}
+                      sx={{ cursor: 'pointer', fontWeight: 'bold' }}
+                    />
+                  )}
                   
                   {/* Individual Sheet Options */}
                   {availableSheets.map((sheet) => {
